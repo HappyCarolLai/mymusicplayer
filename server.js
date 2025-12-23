@@ -31,7 +31,7 @@ const s3Client = new S3Client({
 
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PLAYLIST_FILE = path.join(__dirname, 'playlist.json');
-const VOLUME_REDUCTION = 0.7; // 音量降低到 70%（降低 30%）
+const VOLUME_REDUCTION = 0.5; // 音量降低到 50%（降低 50%）
 
 // 讀取播放清單
 async function readPlaylist() {
