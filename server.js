@@ -2,24 +2,38 @@ const express = require('express');
 const multer = require('multer');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
+const mongoose = require('mongoose');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+const { Readable } = require('stream');
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 中介軟體
+// --- 中介軟體 ---
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Multer 記憶體儲存
-const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
-});
+// --- MongoDB 設定 ---
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ Connected to MongoDB'))
+  .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
-// R2 客戶端設定
+const PlaylistSchema = new mongoose.Schema({
+  name: { type: String, unique: true, required: true },
+  songs: [{
+    id: String,
+    name: String,
+    url: String,
+    fileName: String
+  }]
+});
+const Playlist = mongoose.model('Playlist', PlaylistSchema);
+
+// --- R2 客戶端設定 ---
 const s3Client = new S3Client({
   region: 'auto',
   endpoint: process.env.R2_ENDPOINT,
@@ -28,204 +42,98 @@ const s3Client = new S3Client({
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
-
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
-const PLAYLIST_FILE = path.join(__dirname, 'playlist.json');
 
-// 讀取播放清單
-async function readPlaylist() {
-  try {
-    const data = await fs.readFile(PLAYLIST_FILE, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    return { playlists: { default: [] } };
-  }
-}
+const upload = multer({ storage: multer.memoryStorage() });
 
-// 寫入播放清單（確保 UTF-8 編碼）
-async function writePlaylist(data) {
-  const jsonStr = JSON.stringify(data, null, 2);
-  await fs.writeFile(PLAYLIST_FILE, jsonStr, { encoding: 'utf8' });
-}
+// --- API 路由 ---
 
-// 生成安全的檔名（支援中文）
-function generateSafeFileName(originalName) {
-  const timestamp = Date.now();
-  const ext = path.extname(originalName);
-  const randomStr = Math.random().toString(36).substring(2, 8);
-  return `${timestamp}_${randomStr}${ext}`;
-}
-
-// API：獲取播放清單
+// 1. 獲取所有清單
 app.get('/api/playlists', async (req, res) => {
   try {
-    const playlist = await readPlaylist();
-    res.json(playlist);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    const data = await Playlist.find();
+    const result = { playlists: {} };
+    data.forEach(p => result.playlists[p.name] = p.songs);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
-ffmpeg.setFfmpegPath(ffmpegPath);
-
-// 上傳 API（音量降低 50%）
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+// 2. 上傳音樂 + 減小音量 50%
+app.post('/api/upload', upload.single('audio'), async (req, res) => {
   try {
-    const file = req.file;
-    const playlistName = req.body.playlist || 'default';
-    
-    if (!file) return res.status(400).json({ error: '沒有檔案' });
+    const { playlistName } = req.body;
+    const originalName = req.file.originalname;
+    const safeFileName = `${Date.now()}-${encodeURIComponent(originalName)}`;
 
-    const safeFileName = generateSafeFileName(file.originalname);
+    // 使用 FFmpeg 處理音量
+    const inputStream = Readable.from(req.file.buffer);
+    const chunks = [];
 
-    // 確保 temp 資料夾存在
-    const tempDir = path.join(__dirname, 'temp');
-    await fs.mkdir(tempDir, { recursive: true });
+    ffmpeg(inputStream)
+      .audioFilters('volume=0.5') // 關鍵：音量減半
+      .format('mp3')
+      .on('error', (err) => { throw err; })
+      .pipe()
+      .on('data', (chunk) => chunks.push(chunk))
+      .on('end', async () => {
+        const processedBuffer = Buffer.concat(chunks);
+        
+        // 上傳至 R2
+        await s3Client.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: safeFileName,
+          Body: processedBuffer,
+          ContentType: 'audio/mpeg'
+        }));
 
-    const tempInput = path.join(tempDir, `in_${safeFileName}`);
-    const tempOutput = path.join(tempDir, `out_${safeFileName}`);
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
+        const newSong = { id: Date.now().toString(), name: originalName, url: publicUrl, fileName: safeFileName };
 
-    // 寫入暫存檔
-    await fs.writeFile(tempInput, file.buffer);
+        await Playlist.findOneAndUpdate(
+          { name: playlistName },
+          { $push: { songs: newSong } },
+          { upsert: true }
+        );
 
-    // 使用 FFmpeg 降低音量 50%
-    await new Promise((resolve, reject) => {
-      ffmpeg(tempInput)
-        .audioCodec('libmp3lame')         // 明確輸出為 mp3
-        .audioFilters('volume=0.5')       // 降低音量 50%
-        .output(tempOutput)
-        .on('start', cmd => console.log('FFmpeg command:', cmd))
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-
-    // 讀取處理後檔案
-    const processedBuffer = await fs.readFile(tempOutput);
-
-    // 上傳到 R2
-    const command = new PutObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: safeFileName,
-      Body: processedBuffer,
-      ContentType: file.mimetype,
-    });
-    await s3Client.send(command);
-
-    // 刪除暫存檔
-    await fs.unlink(tempInput);
-    await fs.unlink(tempOutput);
-
-    // 生成公開 URL
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
-    const ext = path.extname(file.originalname);
-    const originalNameWithoutExt = file.originalname.slice(0, -ext.length);
-
-    // 更新播放清單
-    const playlist = await readPlaylist();
-    if (!playlist.playlists[playlistName]) playlist.playlists[playlistName] = [];
-    playlist.playlists[playlistName].push({
-      id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-      name: originalNameWithoutExt,
-      url: publicUrl,
-      fileName: safeFileName,
-      volumeReduction: 0.5,
-    });
-    await writePlaylist(playlist);
-
-    res.json({ success: true, message: '上傳成功，音量已降低 50%', fileName: safeFileName, originalName: originalNameWithoutExt });
-  } catch (error) {
-    console.error('上傳錯誤:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// API：刪除音樂
-app.delete('/api/delete', async (req, res) => {
-  try {
-    const { fileName, playlistName, songId } = req.body;
-    
-    const playlist = await readPlaylist();
-    
-    // 從指定播放清單中移除
-    if (playlist.playlists[playlistName]) {
-      playlist.playlists[playlistName] = playlist.playlists[playlistName].filter(
-        song => song.id !== songId
-      );
-    }
-    
-    // 檢查其他播放清單是否還有此檔案
-    let stillUsed = false;
-    for (const list of Object.values(playlist.playlists)) {
-      if (list.some(song => song.fileName === fileName)) {
-        stillUsed = true;
-        break;
-      }
-    }
-    
-    // 如果沒有其他清單使用，則從 R2 刪除
-    if (!stillUsed) {
-      const command = new DeleteObjectCommand({
-        Bucket: BUCKET_NAME,
-        Key: fileName,
+        res.json({ success: true, song: newSong });
       });
-      await s3Client.send(command);
-    }
-    
-    await writePlaylist(playlist);
-    
-    res.json({ success: true, message: '刪除成功', deletedFromR2: !stillUsed });
-  } catch (error) {
-    console.error('刪除錯誤:', error);
-    res.status(500).json({ error: error.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API：新增播放清單
-app.post('/api/playlist', async (req, res) => {
-  try {
-    const { name } = req.body;
-    
-    if (!name || name.trim() === '') {
-      return res.status(400).json({ error: '播放清單名稱不可為空' });
-    }
-    
-    const playlist = await readPlaylist();
-    
-    if (playlist.playlists[name]) {
-      return res.status(400).json({ error: '播放清單已存在' });
-    }
-    
-    playlist.playlists[name] = [];
-    await writePlaylist(playlist);
-    
-    res.json({ success: true, message: '播放清單建立成功', name });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// 3. 重新命名清單
+app.put('/api/playlist/rename', async (req, res) => {
+  const { oldName, newName } = req.body;
+  await Playlist.findOneAndUpdate({ name: oldName }, { name: newName });
+  res.json({ success: true });
 });
 
-// API：刪除播放清單
+// 4. 刪除音樂
+app.delete('/api/music', async (req, res) => {
+    const { fileName, playlistName, songId } = req.body;
+    try {
+        // 從資料庫移除
+        await Playlist.findOneAndUpdate(
+            { name: playlistName },
+            { $pull: { songs: { id: songId } } }
+        );
+        // 從 R2 移除
+        await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: fileName }));
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 5. 刪除清單
 app.delete('/api/playlist', async (req, res) => {
-  try {
     const { name } = req.body;
-    const playlist = await readPlaylist();
-    
-    if (name === 'default') {
-      return res.status(400).json({ error: '不能刪除預設播放清單' });
+    const target = await Playlist.findOne({ name });
+    if (target) {
+        // 批次刪除 R2 檔案
+        for (const song of target.songs) {
+            await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: song.fileName }));
+        }
+        await Playlist.deleteOne({ name });
     }
-    
-    delete playlist.playlists[name];
-    await writePlaylist(playlist);
-    
-    res.json({ success: true, message: '播放清單刪除成功' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    res.json({ success: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`伺服器運行於 port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
