@@ -70,7 +70,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// 上傳 API
+// 上傳 API（音量降低 50%）
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
@@ -80,17 +80,23 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     const safeFileName = generateSafeFileName(file.originalname);
 
-    // 暫存原始 MP3
-    const tempInput = path.join(__dirname, 'temp', `in_${safeFileName}`);
-    const tempOutput = path.join(__dirname, 'temp', `out_${safeFileName}`);
-    await fs.mkdir(path.join(__dirname, 'temp'), { recursive: true });
+    // 確保 temp 資料夾存在
+    const tempDir = path.join(__dirname, 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+
+    const tempInput = path.join(tempDir, `in_${safeFileName}`);
+    const tempOutput = path.join(tempDir, `out_${safeFileName}`);
+
+    // 寫入暫存檔
     await fs.writeFile(tempInput, file.buffer);
 
     // 使用 FFmpeg 降低音量 50%
     await new Promise((resolve, reject) => {
       ffmpeg(tempInput)
-        .audioFilters(`volume=0.5`)
+        .audioCodec('libmp3lame')         // 明確輸出為 mp3
+        .audioFilters('volume=0.5')       // 降低音量 50%
         .output(tempOutput)
+        .on('start', cmd => console.log('FFmpeg command:', cmd))
         .on('end', resolve)
         .on('error', reject)
         .run();
@@ -125,7 +131,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       name: originalNameWithoutExt,
       url: publicUrl,
       fileName: safeFileName,
-      volumeReduction: 0.5, // 真正音量已降 50%
+      volumeReduction: 0.5,
     });
     await writePlaylist(playlist);
 
