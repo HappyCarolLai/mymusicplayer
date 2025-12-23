@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>私人音樂播放器</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 頂部控制區 -->
+        <div class="top-controls">
+            <select id="playlistSelector" class="playlist-selector">
+                <option value="default">預設清單</option>
+            </select>
+            <button id="newPlaylistBtn" class="icon-btn">➕</button>
+            <button id="uploadBtn" class="icon-btn">⬆️</button>
+            <input type="file" id="fileInput" accept="audio/*" style="display:none" multiple>
+        </div>
+
+        <!-- 歌曲清單 -->
+        <div class="song-list" id="songList">
+            <div class="empty-state">🎵 還沒有音樂，點擊上方上傳按鈕新增</div>
+        </div>
+
+        <!-- 播放器控制區（底部固定） -->
+        <div class="player-controls">
+            <div class="now-playing" id="nowPlaying">未播放</div>
+            
+            <div class="progress-container">
+                <span id="currentTime">0:00</span>
+                <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0">
+                <span id="duration">0:00</span>
+            </div>
+
+            <div class="control-buttons">
+                <button id="shuffleBtn" class="control-btn">🔀</button>
+                <button id="prevBtn" class="control-btn">⏮️</button>
+                <button id="playBtn" class="control-btn play-btn">▶️</button>
+                <button id="nextBtn" class="control-btn">⏭️</button>
+                <button id="volumeBtn" class="control-btn">🔊</button>
+            </div>
+
+            <div class="volume-container" id="volumeContainer" style="display:none">
+                <input type="range" id="volumeBar" class="volume-bar" min="0" max="100" value="80">
+            </div>
+        </div>
+    </div>
+
+    <audio id="audioPlayer"></audio>
+    <script src="/app.js"></script>
+</body>
+</html>
