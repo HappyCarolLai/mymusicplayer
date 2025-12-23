@@ -289,38 +289,37 @@ function showToast(message) {
 }
 
 // 上傳音樂
-async function handleUpload(event) {
-    const files = event.target.files;
-    if (files.length === 0) return;
-    
-    showToast(`正在上傳 ${files.length} 個檔案...`);
-    
-    let successCount = 0;
+async function handleUpload(files) {
+    const playlistName = playlistSelector.value;
     
     for (const file of files) {
         const formData = new FormData();
-        formData.append('file', file);
-        formData.append('playlist', currentPlaylist);
-        
+        // 關鍵點：這裡必須是 'audio'，要跟後端的 upload.single('audio') 對應
+        formData.append('audio', file); 
+        formData.append('playlistName', playlistName);
+
         try {
             const response = await fetch('/api/upload', {
                 method: 'POST',
-                body: formData
+                body: formData // 注意：使用 FormData 時不要手動設定 Content-Type header
             });
-            
+
             if (response.ok) {
-                successCount++;
+                const result = await response.json();
+                console.log('上傳成功:', result);
+                showToast(`上傳成功: ${file.name}`);
+            } else {
+                const errorData = await response.json();
+                console.error('上傳失敗:', errorData);
+                showToast(`上傳失敗: ${errorData.error || '未知錯誤'}`);
             }
         } catch (error) {
-            console.error('上傳失敗:', error);
+            console.error('網路錯誤:', error);
+            showToast('網路錯誤，請稍後再試');
         }
     }
-    
-    showToast(`成功上傳 ${successCount}/${files.length} 個檔案`);
-    
-    // 重新載入播放清單
+    // 全部上傳完後重新載入清單
     await loadPlaylists();
-    fileInput.value = '';
 }
 
 // 刪除歌曲

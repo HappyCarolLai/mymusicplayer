@@ -56,37 +56,75 @@ app.get('/api/playlists', async (req, res) => {
 
 // 2. 上傳 + 音量減半 (0.5)
 app.post('/api/upload', upload.single('audio'), async (req, res) => {
-  try {
-    const { playlistName } = req.body;
-    const originalName = req.file.originalname;
-    const safeFileName = `${Date.now()}-${encodeURIComponent(originalName)}`;
+    console.log('--- 開始處理上傳 ---');
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: '未接收到檔案' });
+        }
 
-    const inputStream = Readable.from(req.file.buffer);
-    const chunks = [];
+        const { playlistName } = req.body;
+        const originalName = req.file.originalname;
+        const safeFileName = `${Date.now()}-${encodeURIComponent(originalName)}`;
 
-    ffmpeg(inputStream)
-      .audioFilters('volume=0.5') // 音量減半
-      .format('mp3')
-      .on('error', (err) => { throw err; })
-      .pipe()
-      .on('data', (chunk) => chunks.push(chunk))
-      .on('end', async () => {
-        const processedBuffer = Buffer.concat(chunks);
-        await s3Client.send(new PutObjectCommand({
-          Bucket: BUCKET_NAME, Key: safeFileName, Body: processedBuffer, ContentType: 'audio/mpeg'
-        }));
+        console.log('正在處理音訊: ', originalName);
 
-        const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
-        const newSong = { id: Date.now().toString(), name: originalName, url: publicUrl, fileName: safeFileName };
+        const inputStream = Readable.from(req.file.buffer);
+        const chunks = [];
 
-        await Playlist.findOneAndUpdate(
-          { name: playlistName || '預設清單' },
-          { $push: { songs: newSong } },
-          { upsert: true, new: true }
-        );
-        res.json({ success: true, song: newSong });
-      });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+        // 建立 FFmpeg 處理
+        ffmpeg(inputStream)
+            .audioFilters('volume=0.5') // 使用者要求的音量減半
+            .format('mp3')
+            .on('start', (cmd) => console.log('FFmpeg 指令啟動'))
+            .on('error', (err) => {
+                console.error('FFmpeg 錯誤:', err.message);
+                if (!res.headersSent) res.status(500).json({ error: '音訊處理失敗' });
+            })
+            .pipe()
+            .on('data', (chunk) => chunks.push(chunk))
+            .on('end', async () => {
+                try {
+                    console.log('FFmpeg 處理完成，準備上傳至 R2...');
+                    const processedBuffer = Buffer.concat(chunks);
+                    
+                    await s3Client.send(new PutObjectCommand({
+                        Bucket: BUCKET_NAME,
+                        Key: safeFileName,
+                        Body: processedBuffer,
+                        ContentType: 'audio/mpeg'
+                    }));
+
+                    const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
+                    const newSong = { 
+                        id: Date.now().toString(), 
+                        name: originalName, 
+                        url: publicUrl, 
+                        fileName: safeFileName 
+                    };
+
+                    // 確保 MongoDB 已連線才執行
+                    if (mongoose.connection.readyState !== 1) {
+                        throw new Error('MongoDB 未連線');
+                    }
+
+                    await Playlist.findOneAndUpdate(
+                        { name: playlistName || '預設清單' },
+                        { $push: { songs: newSong } },
+                        { upsert: true, new: true }
+                    );
+
+                    console.log('✅ 全部流程完成');
+                    res.json({ success: true, song: newSong });
+                } catch (innerError) {
+                    console.error('上傳或資料庫寫入錯誤:', innerError);
+                    if (!res.headersSent) res.status(500).json({ error: innerError.message });
+                }
+            });
+
+    } catch (err) {
+        console.error('全域捕捉錯誤:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 3. 新增清單
