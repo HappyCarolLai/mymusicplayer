@@ -74,64 +74,70 @@ app.get('/api/playlists', async (req, res) => {
   }
 });
 
-// API：上傳音樂
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+// 上傳 API
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     const playlistName = req.body.playlist || 'default';
     
-    if (!file) {
-      return res.status(400).json({ error: '沒有檔案' });
-    }
+    if (!file) return res.status(400).json({ error: '沒有檔案' });
 
-    console.log('收到檔案:', file.originalname);
-    
-    // 生成安全檔名（避免中文問題）
     const safeFileName = generateSafeFileName(file.originalname);
-    
+
+    // 暫存原始 MP3
+    const tempInput = path.join(__dirname, 'temp', `in_${safeFileName}`);
+    const tempOutput = path.join(__dirname, 'temp', `out_${safeFileName}`);
+    await fs.mkdir(path.join(__dirname, 'temp'), { recursive: true });
+    await fs.writeFile(tempInput, file.buffer);
+
+    // 使用 FFmpeg 降低音量 50%
+    await new Promise((resolve, reject) => {
+      ffmpeg(tempInput)
+        .audioFilters(`volume=0.5`)
+        .output(tempOutput)
+        .on('end', resolve)
+        .on('error', reject)
+        .run();
+    });
+
+    // 讀取處理後檔案
+    const processedBuffer = await fs.readFile(tempOutput);
+
     // 上傳到 R2
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: safeFileName,
-      Body: file.buffer,
+      Body: processedBuffer,
       ContentType: file.mimetype,
     });
-    
     await s3Client.send(command);
-    
+
+    // 刪除暫存檔
+    await fs.unlink(tempInput);
+    await fs.unlink(tempOutput);
+
     // 生成公開 URL
     const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
-    
-    // 提取原始檔名（不含副檔名），保留中文
     const ext = path.extname(file.originalname);
     const originalNameWithoutExt = file.originalname.slice(0, -ext.length);
-    
-    console.log('原始檔名（不含副檔名）:', originalNameWithoutExt);
-    
+
     // 更新播放清單
     const playlist = await readPlaylist();
-    if (!playlist.playlists[playlistName]) {
-      playlist.playlists[playlistName] = [];
-    }
-    
+    if (!playlist.playlists[playlistName]) playlist.playlists[playlistName] = [];
     playlist.playlists[playlistName].push({
       id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-      name: originalNameWithoutExt, // 保留完整中文檔名
+      name: originalNameWithoutExt,
       url: publicUrl,
       fileName: safeFileName,
-      volumeReduction: VOLUME_REDUCTION,
+      volumeReduction: 0.5, // 真正音量已降 50%
     });
-    
     await writePlaylist(playlist);
-    
-    console.log('播放清單已更新');
-    
-    res.json({ 
-      success: true, 
-      message: '上傳成功（播放時音量將降低 50%）', 
-      fileName: safeFileName,
-      originalName: originalNameWithoutExt
-    });
+
+    res.json({ success: true, message: '上傳成功，音量已降低 50%', fileName: safeFileName, originalName: originalNameWithoutExt });
   } catch (error) {
     console.error('上傳錯誤:', error);
     res.status(500).json({ error: error.message });
