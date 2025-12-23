@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     audio.addEventListener('timeupdate', updateProgress);
     audio.addEventListener('loadedmetadata', updateDuration);
-    audio.addEventListener('ended', playNext); // iOS 重要：結束立刻播下一首
+    audio.addEventListener('ended', playNext); 
 
     if ('mediaSession' in navigator) {
         navigator.mediaSession.setActionHandler('play', togglePlay);
@@ -111,6 +111,7 @@ function playSong(index) {
 }
 
 function togglePlay() {
+    if (currentSongs.length === 0) return;
     if (isPlaying) audio.pause(); else audio.play();
     isPlaying = !isPlaying;
     updatePlayButton();
@@ -130,6 +131,7 @@ function playNext() {
 }
 
 function playPrevious() {
+    if (currentSongs.length === 0) return;
     currentIndex = (currentIndex - 1 + currentSongs.length) % currentSongs.length;
     playSong(currentIndex);
 }
@@ -145,8 +147,13 @@ async function handleUpload(files) {
         const formData = new FormData();
         formData.append('audio', file);
         formData.append('playlistName', currentPlaylist);
-        showToast(`正在處理音量並上傳: ${file.name}`);
-        await fetch('/api/upload', { method: 'POST', body: formData });
+        console.log(`正在上傳: ${file.name}`);
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            if (!res.ok) throw new Error('伺服器錯誤');
+        } catch (e) {
+            alert(`上傳失敗: ${file.name}`);
+        }
     }
     await loadPlaylists();
     fileInput.value = '';
@@ -190,18 +197,10 @@ function updateProgress() {
     progressBar.value = (audio.currentTime / audio.duration) * 100 || 0;
     currentTimeEl.textContent = formatTime(audio.currentTime);
 }
-
 function updateDuration() { durationEl.textContent = formatTime(audio.duration); }
-
 function seek() { audio.currentTime = (progressBar.value / 100) * audio.duration; }
-
 function formatTime(s) {
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
     return `${m}:${sec.toString().padStart(2, '0')}`;
-}
-
-function showToast(msg) {
-    console.log(msg);
-    // 這裡可以實作簡單的彈出提示框
 }
