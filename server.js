@@ -31,7 +31,7 @@ const s3Client = new S3Client({
 
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PLAYLIST_FILE = path.join(__dirname, 'playlist.json');
-const VOLUME_REDUCTION = 0.5; // 音量降低到 50%（降低 50%）
+const VOLUME_REDUCTION = 0.7; // 音量降低到 70%（降低 30%）
 
 // 讀取播放清單
 async function readPlaylist() {
@@ -43,9 +43,10 @@ async function readPlaylist() {
   }
 }
 
-// 寫入播放清單
+// 寫入播放清單（確保 UTF-8 編碼）
 async function writePlaylist(data) {
-  await fs.writeFile(PLAYLIST_FILE, JSON.stringify(data, null, 2), 'utf8');
+  const jsonStr = JSON.stringify(data, null, 2);
+  await fs.writeFile(PLAYLIST_FILE, jsonStr, { encoding: 'utf8' });
 }
 
 // 生成安全的檔名（支援中文）
@@ -83,16 +84,17 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: '沒有檔案' });
     }
 
-    // 生成安全檔名
+    console.log('收到檔案:', file.originalname);
+    
+    // 生成安全檔名（避免中文問題）
     const safeFileName = generateSafeFileName(file.originalname);
     
-    // 上傳到 R2（原始音訊）
+    // 上傳到 R2
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: safeFileName,
       Body: file.buffer,
       ContentType: file.mimetype,
-      ContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(file.originalname)}`,
     });
     
     await s3Client.send(command);
@@ -100,28 +102,35 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     // 生成公開 URL
     const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
     
-    // 更新播放清單，保留原始檔名（含中文）
+    // 提取原始檔名（不含副檔名），保留中文
+    const ext = path.extname(file.originalname);
+    const originalNameWithoutExt = file.originalname.slice(0, -ext.length);
+    
+    console.log('原始檔名（不含副檔名）:', originalNameWithoutExt);
+    
+    // 更新播放清單
     const playlist = await readPlaylist();
     if (!playlist.playlists[playlistName]) {
       playlist.playlists[playlistName] = [];
     }
     
-    const originalNameWithoutExt = path.basename(file.originalname, path.extname(file.originalname));
-    
     playlist.playlists[playlistName].push({
       id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-      name: originalNameWithoutExt,
+      name: originalNameWithoutExt, // 保留完整中文檔名
       url: publicUrl,
       fileName: safeFileName,
-      volumeReduction: VOLUME_REDUCTION, // 標記音量降低比例
+      volumeReduction: VOLUME_REDUCTION,
     });
     
     await writePlaylist(playlist);
     
+    console.log('播放清單已更新');
+    
     res.json({ 
       success: true, 
-      message: '上傳成功（播放時音量將降低 30%）', 
-      fileName: safeFileName 
+      message: '上傳成功（播放時音量將降低 50%）', 
+      fileName: safeFileName,
+      originalName: originalNameWithoutExt
     });
   } catch (error) {
     console.error('上傳錯誤:', error);

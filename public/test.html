@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音量測試頁面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 12px 24px;
+            margin: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            background: #4CAF50;
+            color: white;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #2196F3;
+        }
+        .warning {
+            background: #fff3e0;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #ff9800;
+        }
+        input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+        }
+        #volumeDisplay {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2196F3;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔊 音量控制測試</h1>
+    
+    <div class="test-section">
+        <h2>測試說明</h2>
+        <div class="info">
+            <strong>目標：</strong>讓音樂音量降低到 50%（原音量的一半）
+        </div>
+        <div class="warning">
+            <strong>注意：</strong>在 iPhone 上測試時，請確保：
+            <ul>
+                <li>靜音模式已關閉</li>
+                <li>系統音量調到最大</li>
+                <li>在 Safari 中打開此頁面</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>步驟 1：上傳測試音樂</h2>
+        <input type="file" id="testFile" accept="audio/*">
+        <button onclick="loadTestAudio()">載入音樂</button>
+    </div>
+
+    <div class="test-section">
+        <h2>步驟 2：播放原始音量</h2>
+        <button onclick="playOriginal()">▶️ 播放原始音量</button>
+        <button onclick="stopAudio()">⏸️ 停止</button>
+        <div class="info">
+            當前音量：<span id="volumeDisplay">100%</span>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>步驟 3：播放降低後的音量</h2>
+        <button onclick="playReduced()">▶️ 播放 50% 音量</button>
+        <p>使用 Web Audio API 強制降低音量</p>
+    </div>
+
+    <div class="test-section">
+        <h2>步驟 4：對比測試</h2>
+        <p>請比較兩種播放方式的音量差異：</p>
+        <ol>
+            <li>先播放「原始音量」，記住音量大小</li>
+            <li>再播放「50% 音量」，應該明顯變小聲</li>
+            <li>如果沒有變化，說明 iOS 阻止了音量控制</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>測試結果</h2>
+        <div id="result"></div>
+    </div>
+
+    <audio id="testAudio"></audio>
+
+    <script>
+        let audioContext = null;
+        let audioSource = null;
+        let gainNode = null;
+        const audio = document.getElementById('testAudio');
+        let isUsingWebAudio = false;
+
+        function loadTestAudio() {
+            const file = document.getElementById('testFile').files[0];
+            if (!file) {
+                alert('請先選擇音樂檔案');
+                return;
+            }
+
+            const url = URL.createObjectURL(file);
+            audio.src = url;
+            
+            document.getElementById('result').innerHTML = 
+                '<div class="info">✅ 音樂已載入：' + file.name + '</div>';
+        }
+
+        function playOriginal() {
+            stopAudio();
+            
+            // 不使用 Web Audio API，直接播放
+            audio.volume = 1.0;
+            audio.play();
+            
+            document.getElementById('volumeDisplay').textContent = '100%';
+            document.getElementById('result').innerHTML = 
+                '<div class="info">🔊 正在播放：原始音量 100%<br>（系統音量 × 100%）</div>';
+        }
+
+        function playReduced() {
+            stopAudio();
+            
+            try {
+                // 初始化 Web Audio API
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    audioSource = audioContext.createMediaElementSource(audio);
+                    gainNode = audioContext.createGain();
+                    audioSource.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                }
+                
+                // 恢復 context（iOS 需要）
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                
+                // 設定增益為 0.5（50%）
+                gainNode.gain.value = 0.5;
+                audio.volume = 1.0; // HTML5 音量保持 100%
+                audio.play();
+                
+                document.getElementById('volumeDisplay').textContent = '50%';
+                document.getElementById('result').innerHTML = 
+                    '<div class="warning">🔊 正在播放：降低後的音量 50%<br>' +
+                    '（系統音量 × Web Audio API 50%）<br><br>' +
+                    '<strong>如果音量沒有變小：</strong><br>' +
+                    '這表示 iOS 阻止了網頁控制音量</div>';
+                
+            } catch (error) {
+                document.getElementById('result').innerHTML = 
+                    '<div class="warning">❌ Web Audio API 錯誤：' + error.message + 
+                    '<br><br>可能原因：瀏覽器不支援或被 iOS 限制</div>';
+            }
+        }
+
+        function stopAudio() {
+            audio.pause();
+            audio.currentTime = 0;
+        }
+    </script>
+</body>
+</html>
