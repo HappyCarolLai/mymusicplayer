@@ -14,39 +14,72 @@
     <div class="container">
         <!-- 頂部控制區 -->
         <div class="top-controls">
-            <select id="playlistSelector" class="playlist-selector">
-                <option value="default">預設清單</option>
-            </select>
-            <button id="newPlaylistBtn" class="icon-btn">➕</button>
-            <button id="uploadBtn" class="icon-btn">⬆️</button>
+            <div class="playlist-header">
+                <select id="playlistSelector" class="playlist-selector">
+                    <option value="default">🎵 預設清單</option>
+                </select>
+                <div class="header-buttons">
+                    <button id="newPlaylistBtn" class="icon-btn" title="新增清單">➕</button>
+                    <button id="uploadBtn" class="icon-btn" title="上傳音樂">📁</button>
+                </div>
+            </div>
             <input type="file" id="fileInput" accept="audio/*" style="display:none" multiple>
         </div>
 
         <!-- 歌曲清單 -->
         <div class="song-list" id="songList">
-            <div class="empty-state">🎵 還沒有音樂，點擊上方上傳按鈕新增</div>
+            <div class="empty-state">
+                <div class="empty-icon">🎵</div>
+                <div class="empty-text">還沒有音樂</div>
+                <div class="empty-hint">點擊上方 📁 按鈕上傳</div>
+            </div>
         </div>
 
         <!-- 播放器控制區（底部固定） -->
         <div class="player-controls">
-            <div class="now-playing" id="nowPlaying">未播放</div>
-            
+            <!-- 專輯封面和歌曲資訊 -->
+            <div class="player-info">
+                <div class="album-art" id="albumArt">
+                    <div class="default-cover">🎵</div>
+                </div>
+                <div class="track-info">
+                    <div class="track-name" id="nowPlaying">未播放</div>
+                    <div class="track-artist">私人音樂庫</div>
+                </div>
+            </div>
+
+            <!-- 進度條 -->
             <div class="progress-container">
-                <span id="currentTime">0:00</span>
+                <span id="currentTime" class="time-label">0:00</span>
                 <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0">
-                <span id="duration">0:00</span>
+                <span id="duration" class="time-label">0:00</span>
             </div>
 
+            <!-- 控制按鈕 -->
             <div class="control-buttons">
-                <button id="shuffleBtn" class="control-btn">🔀</button>
-                <button id="prevBtn" class="control-btn">⏮️</button>
-                <button id="playBtn" class="control-btn play-btn">▶️</button>
-                <button id="nextBtn" class="control-btn">⏭️</button>
-                <button id="volumeBtn" class="control-btn">🔊</button>
-            </div>
-
-            <div class="volume-container" id="volumeContainer" style="display:none">
-                <input type="range" id="volumeBar" class="volume-bar" min="0" max="100" value="80">
+                <button id="shuffleBtn" class="control-btn shuffle-btn" title="隨機播放">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>
+                    </svg>
+                </button>
+                <button id="prevBtn" class="control-btn" title="上一首">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+                    </svg>
+                </button>
+                <button id="playBtn" class="control-btn play-btn" title="播放">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" class="play-icon">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" class="pause-icon" style="display:none">
+                        <path d="M6 4h4v16H6zM14 4h4v16h-4z"/>
+                    </svg>
+                </button>
+                <button id="nextBtn" class="control-btn" title="下一首">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M16 18h2V6h-2zM6 18l8.5-6L6 6z"/>
+                    </svg>
+                </button>
             </div>
         </div>
     </div>

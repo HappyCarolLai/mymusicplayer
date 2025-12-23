@@ -5,20 +5,12 @@ let currentIndex = 0;
 let isPlaying = false;
 let isShuffle = false;
 
-// Web Audio API 用於強制音量控制
-let audioContext = null;
-let audioSource = null;
-let gainNode = null;
-
 // DOM 元素
 const audio = document.getElementById('audioPlayer');
 const playBtn = document.getElementById('playBtn');
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const shuffleBtn = document.getElementById('shuffleBtn');
-const volumeBtn = document.getElementById('volumeBtn');
-const volumeContainer = document.getElementById('volumeContainer');
-const volumeBar = document.getElementById('volumeBar');
 const progressBar = document.getElementById('progressBar');
 const nowPlaying = document.getElementById('nowPlaying');
 const currentTimeEl = document.getElementById('currentTime');
@@ -37,19 +29,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
     
-    // 初始化 Web Audio API（用於強制降低音量）
-    initWebAudio();
-    
-    // 讀取儲存的音量
-    const savedVolume = localStorage.getItem('volume');
-    if (savedVolume) {
-        audio.volume = savedVolume / 100;
-        volumeBar.value = savedVolume;
-    } else {
-        audio.volume = 0.8;
-        volumeBar.value = 80;
-    }
-    
     // 載入播放清單
     await loadPlaylists();
     
@@ -58,8 +37,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     prevBtn.addEventListener('click', playPrevious);
     nextBtn.addEventListener('click', playNext);
     shuffleBtn.addEventListener('click', toggleShuffle);
-    volumeBtn.addEventListener('click', toggleVolume);
-    volumeBar.addEventListener('input', changeVolume);
     progressBar.addEventListener('input', seek);
     playlistSelector.addEventListener('change', handlePlaylistChange);
     uploadBtn.addEventListener('click', () => fileInput.click());
@@ -78,30 +55,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         navigator.mediaSession.setActionHandler('nexttrack', playNext);
     }
 });
-
-// 初始化 Web Audio API
-function initWebAudio() {
-    try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // 創建音訊源
-        if (!audioSource) {
-            audioSource = audioContext.createMediaElementSource(audio);
-        }
-        
-        // 創建增益節點（控制音量）
-        gainNode = audioContext.createGain();
-        gainNode.gain.value = 0.5; // 預設降低到 50%
-        
-        // 連接：音訊源 -> 增益節點 -> 揚聲器
-        audioSource.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        console.log('Web Audio API 初始化成功，音量強制降低到 50%');
-    } catch (error) {
-        console.error('Web Audio API 初始化失敗:', error);
-    }
-}
 
 // 載入所有播放清單
 async function loadPlaylists() {
@@ -217,11 +170,6 @@ function playSong(index) {
     currentIndex = index;
     const song = currentSongs[currentIndex];
     
-    // 確保 AudioContext 已恢復（iOS 需要用戶交互）
-    if (audioContext && audioContext.state === 'suspended') {
-        audioContext.resume();
-    }
-    
     audio.src = song.url;
     audio.play().catch(err => console.error('播放失敗:', err));
     isPlaying = true;
@@ -261,11 +209,6 @@ function updatePlayButton() {
 // 播放/暫停
 function togglePlay() {
     if (currentSongs.length === 0) return;
-    
-    // 確保 AudioContext 已恢復
-    if (audioContext && audioContext.state === 'suspended') {
-        audioContext.resume();
-    }
     
     if (isPlaying) {
         audio.pause();
@@ -307,27 +250,6 @@ function toggleShuffle() {
     } else {
         shuffleBtn.classList.remove('active');
     }
-}
-
-// 音量控制
-function toggleVolume() {
-    volumeContainer.style.display = 
-        volumeContainer.style.display === 'none' ? 'block' : 'none';
-}
-
-function changeVolume() {
-    const userVolume = volumeBar.value / 100;
-    
-    // 同時更新 HTML5 audio 和 Web Audio API 的音量
-    audio.volume = userVolume;
-    
-    // 注意：gainNode 的值已經設定為 0.5，不需要再調整
-    // 如果要讓滑桿也影響最終音量，可以這樣：
-    // if (gainNode) {
-    //     gainNode.gain.value = userVolume * 0.5; // 用戶音量 × 50% 降低
-    // }
-    
-    localStorage.setItem('volume', volumeBar.value);
 }
 
 // 進度條

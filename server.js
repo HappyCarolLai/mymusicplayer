@@ -31,7 +31,6 @@ const s3Client = new S3Client({
 
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PLAYLIST_FILE = path.join(__dirname, 'playlist.json');
-const VOLUME_REDUCTION = 0.7; // 音量降低到 70%（降低 30%）
 
 // 讀取播放清單
 async function readPlaylist() {
@@ -55,13 +54,6 @@ function generateSafeFileName(originalName) {
   const ext = path.extname(originalName);
   const randomStr = Math.random().toString(36).substring(2, 8);
   return `${timestamp}_${randomStr}${ext}`;
-}
-
-// 簡單的音量降低處理（針對 WAV/PCM 格式）
-function reduceVolume(buffer, reduction = VOLUME_REDUCTION) {
-  // 對於 MP3/M4A 等壓縮格式，我們在前端用 Web Audio API 處理
-  // 這裡直接返回原始 buffer，並在元數據中標記音量
-  return buffer;
 }
 
 // API：獲取播放清單
