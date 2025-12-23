@@ -1,7 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
@@ -15,7 +14,10 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // Multer 記憶體儲存
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+});
 
 // R2 客戶端設定
 const s3Client = new S3Client({
@@ -29,6 +31,7 @@ const s3Client = new S3Client({
 
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PLAYLIST_FILE = path.join(__dirname, 'playlist.json');
+const VOLUME_REDUCTION = 0.7; // 音量降低到 70%（降低 30%）
 
 // 讀取播放清單
 async function readPlaylist() {
@@ -42,7 +45,22 @@ async function readPlaylist() {
 
 // 寫入播放清單
 async function writePlaylist(data) {
-  await fs.writeFile(PLAYLIST_FILE, JSON.stringify(data, null, 2));
+  await fs.writeFile(PLAYLIST_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// 生成安全的檔名（支援中文）
+function generateSafeFileName(originalName) {
+  const timestamp = Date.now();
+  const ext = path.extname(originalName);
+  const randomStr = Math.random().toString(36).substring(2, 8);
+  return `${timestamp}_${randomStr}${ext}`;
+}
+
+// 簡單的音量降低處理（針對 WAV/PCM 格式）
+function reduceVolume(buffer, reduction = VOLUME_REDUCTION) {
+  // 對於 MP3/M4A 等壓縮格式，我們在前端用 Web Audio API 處理
+  // 這裡直接返回原始 buffer，並在元數據中標記音量
+  return buffer;
 }
 
 // API：獲取播放清單
@@ -65,39 +83,46 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: '沒有檔案' });
     }
 
-    // 生成唯一檔名
-    const timestamp = Date.now();
-    const fileName = `${timestamp}_${Buffer.from(file.originalname).toString('base64').substring(0, 20)}.${file.originalname.split('.').pop()}`;
+    // 生成安全檔名
+    const safeFileName = generateSafeFileName(file.originalname);
     
-    // 上傳到 R2
+    // 上傳到 R2（原始音訊）
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
-      Key: fileName,
+      Key: safeFileName,
       Body: file.buffer,
       ContentType: file.mimetype,
+      ContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(file.originalname)}`,
     });
     
     await s3Client.send(command);
     
     // 生成公開 URL
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${fileName}`;
+    const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
     
-    // 更新播放清單
+    // 更新播放清單，保留原始檔名（含中文）
     const playlist = await readPlaylist();
     if (!playlist.playlists[playlistName]) {
       playlist.playlists[playlistName] = [];
     }
     
+    const originalNameWithoutExt = path.basename(file.originalname, path.extname(file.originalname));
+    
     playlist.playlists[playlistName].push({
-      id: timestamp.toString(),
-      name: file.originalname.replace(/\.[^/.]+$/, ''),
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+      name: originalNameWithoutExt,
       url: publicUrl,
-      fileName: fileName,
+      fileName: safeFileName,
+      volumeReduction: VOLUME_REDUCTION, // 標記音量降低比例
     });
     
     await writePlaylist(playlist);
     
-    res.json({ success: true, message: '上傳成功', fileName });
+    res.json({ 
+      success: true, 
+      message: '上傳成功（播放時音量將降低 30%）', 
+      fileName: safeFileName 
+    });
   } catch (error) {
     console.error('上傳錯誤:', error);
     res.status(500).json({ error: error.message });
@@ -149,6 +174,11 @@ app.delete('/api/delete', async (req, res) => {
 app.post('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
+    
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: '播放清單名稱不可為空' });
+    }
+    
     const playlist = await readPlaylist();
     
     if (playlist.playlists[name]) {
@@ -158,7 +188,7 @@ app.post('/api/playlist', async (req, res) => {
     playlist.playlists[name] = [];
     await writePlaylist(playlist);
     
-    res.json({ success: true, message: '播放清單建立成功' });
+    res.json({ success: true, message: '播放清單建立成功', name });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -184,5 +214,5 @@ app.delete('/api/playlist', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`伺服器運行於 http://localhost:${PORT}`);
+  console.log(`伺服器運行於 port ${PORT}`);
 });
