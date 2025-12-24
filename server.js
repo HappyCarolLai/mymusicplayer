@@ -59,7 +59,7 @@ app.get('/api/playlists', async (req, res) => {
     const data = await Playlist.find();
     const result = { playlists: {} };
     data.forEach(p => result.playlists[p.name] = p.songs);
-    if (!result.playlists['default']) result.playlists['default'] = [];
+    if (!result.playlists['所有歌曲']) result.playlists['所有歌曲'] = [];
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -101,7 +101,7 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
     };
 
     await Playlist.findOneAndUpdate(
-      { name: playlistName || 'default' },
+      { name: playlistName || '所有歌曲' },
       { $push: { songs: newSong } },
       { upsert: true, new: true }
     );
@@ -110,6 +110,32 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
   } catch (err) {
     console.error('上傳失敗:', err);
     if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// 複製或移動歌曲到另一個清單
+app.post('/api/music/copy-to-playlist', async (req, res) => {
+  const { song, targetPlaylistName, deleteFromOriginal, originalPlaylistName } = req.body;
+  
+  try {
+    // 1. 將歌曲加入目標清單
+    await Playlist.findOneAndUpdate(
+      { name: targetPlaylistName },
+      { $push: { songs: song } },
+      { upsert: true }
+    );
+
+    // 2. 如果是「移動」則從原清單刪除
+    if (deleteFromOriginal) {
+      await Playlist.updateOne(
+        { name: originalPlaylistName },
+        { $pull: { songs: { id: song.id } } }
+      );
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -122,9 +148,33 @@ app.put('/api/music/rename', async (req, res) => {
 
 app.delete('/api/music', async (req, res) => {
   const { fileName, playlistName, songId } = req.body;
-  await Playlist.findOneAndUpdate({ name: playlistName }, { $pull: { songs: { id: songId } } });
-  await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: fileName }));
-  res.json({ success: true });
+  try {
+    // 1. 無論在哪個清單，都先從該清單的 songs 陣列中移除
+    await Playlist.findOneAndUpdate(
+      { name: playlistName }, 
+      { $pull: { songs: { id: songId } } }
+    );
+
+    // 2. 只有當清單名稱是「所有歌曲」時，才真正去刪除 R2 的檔案與其他清單的引用
+    if (playlistName === '所有歌曲') {
+      // 刪除 R2 雲端實體檔案
+      await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: fileName }));
+      
+      // (進階選配) 同時從「所有」其他清單中移除這首歌，避免產生失效連結
+      await Playlist.updateMany(
+        {}, 
+        { $pull: { songs: { fileName: fileName } } }
+      );
+      
+      console.log(`實體檔案 ${fileName} 已從雲端及所有清單徹底刪除`);
+    } else {
+      console.log(`僅將歌曲從清單「${playlistName}」移除，保留 R2 檔案`);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/playlist', async (req, res) => {
@@ -135,14 +185,22 @@ app.post('/api/playlist', async (req, res) => {
 });
 
 app.delete('/api/playlist', async (req, res) => {
-  const target = await Playlist.findOne({ name: req.body.name });
-  if (target) {
-    for (const song of target.songs) {
-      await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: song.fileName }));
+  const { name } = req.body;
+  
+  try {
+    // 禁止直接刪除「所有歌曲」清單（因為它是根清單）
+    if (name === '所有歌曲') {
+      return res.status(400).json({ error: '不能刪除所有歌曲清單' });
     }
-    await Playlist.deleteOne({ name: req.body.name });
+
+    // 僅刪除清單文件，不刪除裡面的 R2 檔案 (因為 R2 檔案由「所有歌曲」統一管理)
+    await Playlist.deleteOne({ name: name });
+    
+    console.log(`播放清單「${name}」已移除，保留原始音樂檔案`);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json({ success: true });
 });
 
 app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));

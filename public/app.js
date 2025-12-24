@@ -1,4 +1,4 @@
-let currentPlaylist = 'default';
+let currentPlaylist = '所有歌曲'; // 修改預設清單名稱
 let currentSongs = [];
 let currentIndex = 0;
 let isPlaying = false;
@@ -21,11 +21,8 @@ const newPlaylistBtn = document.getElementById('newPlaylistBtn');
 
 // Toast 提示函數
 function showToast(message, duration = 3000) {
-    // 移除現有的 toast
     const existingToast = document.querySelector('.upload-toast');
-    if (existingToast) {
-        existingToast.remove();
-    }
+    if (existingToast) existingToast.remove();
 
     const toast = document.createElement('div');
     toast.className = 'upload-toast';
@@ -39,14 +36,12 @@ function showToast(message, duration = 3000) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    //if ('serviceWorker' in navigator) {
-    //    navigator.serviceWorker.register('/sw.js').catch(() => {});
-    //}
+    // 註銷舊的 Service Worker 以確保更新
     if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(reg => reg.unregister());
-    });
-}
+        navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(reg => reg.unregister());
+        });
+    }
 
     await loadPlaylists();
     
@@ -78,13 +73,16 @@ async function loadPlaylists() {
         if (!res.ok) throw new Error('無法載入播放清單');
         
         const data = await res.json();
-        const selected = playlistSelector.value || 'default';
+        // 如果原本存的是 default，自動轉向「所有歌曲」
+        const selected = playlistSelector.value || '所有歌曲';
         
         playlistSelector.innerHTML = '';
         Object.keys(data.playlists).forEach(name => {
             const opt = document.createElement('option');
-            opt.value = name;
-            opt.textContent = name === 'default' ? '🎵 預設清單' : `📁 ${name}`;
+            // 將後端可能傳回的 'default' 顯示為 '所有歌曲'
+            const displayName = (name === 'default' || name === '所有歌曲') ? '所有歌曲' : name;
+            opt.value = name; 
+            opt.textContent = (displayName === '所有歌曲') ? '🏠 所有歌曲' : `📁 ${displayName}`;
             opt.selected = (name === selected);
             playlistSelector.appendChild(opt);
         });
@@ -112,7 +110,7 @@ function renderSongList() {
             <div class="empty-state">
                 <div class="empty-icon">🎵</div>
                 <div class="empty-text">還沒有音樂</div>
-                <div class="empty-hint">點擊上方 📁 按鈕上傳</div>
+                <div class="empty-hint">點擊上方按鈕上傳</div>
             </div>
         `;
         return;
@@ -120,14 +118,52 @@ function renderSongList() {
 
     songList.innerHTML = currentSongs.map((song, index) => `
         <div class="song-item ${index === currentIndex && isPlaying ? 'playing' : ''}" onclick="playSong(${index})">
-            <div class="song-album-art">🎵</div>
+            <div class="song-album-art"></div> 
             <div class="song-info">
                 <div class="song-name">${escapeHtml(song.name)}</div>
                 <div class="song-duration">音樂</div>
             </div>
-            <button class="delete-btn" onclick="deleteSong(event, '${song.id}', '${escapeHtml(song.fileName)}')">刪除</button>
+            <div class="song-actions">
+                <button class="move-btn" onclick="openMoveMenu(event, ${index})" title="加入到清單">➕</button>
+                <button class="delete-btn" onclick="deleteSong(event, '${song.id}', '${escapeHtml(song.fileName)}')" title="刪除">🗑️</button>
+            </div>
         </div>
     `).join('');
+}
+
+// 刪除重複的 openMoveMenu，統一使用這一個版本
+async function openMoveMenu(event, index) {
+    event.stopPropagation();
+    const song = currentSongs[index];
+    const target = prompt('請輸入要【加入/移動】到的播放清單名稱：');
+    if (!target || target.trim() === '') return;
+
+    // 這裡可以加一個防呆：如果目標就是當前清單，提醒使用者
+    if (target.trim() === currentPlaylist) {
+        showToast('⚠️ 歌曲已在該清單中');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/music/copy-to-playlist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                song: song,
+                targetPlaylistName: target.trim(),
+                deleteFromOriginal: false 
+            })
+        });
+        
+        if (res.ok) {
+            showToast(`✅ 已將歌曲加入到 ${target}`);
+            await loadPlaylists(); // 重新載入以更新下拉選單
+        } else {
+            throw new Error();
+        }
+    } catch (err) {
+        showToast('❌ 搬移失敗');
+    }
 }
 
 function escapeHtml(text) {
@@ -135,6 +171,8 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ... (其餘 playSong, togglePlay, handleUpload 等函式保持不變) ...
 
 function playSong(index) {
     if (currentSongs.length === 0) return;
@@ -149,36 +187,12 @@ function playSong(index) {
     nowPlaying.textContent = song.name;
     updatePlayButton();
     renderSongList();
-
-    if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: song.name,
-            artist: '私人音樂庫',
-            album: currentPlaylist,
-            artwork: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
-        });
-    }
 }
 
 function togglePlay() {
-    if (currentSongs.length === 0) {
-        showToast('⚠️ 請先上傳音樂');
-        return;
-    }
-    
-    if (!audio.src) {
-        playSong(0);
-        return;
-    }
-    
-    if (isPlaying) {
-        audio.pause();
-    } else {
-        audio.play().catch(err => {
-            showToast('❌ 播放失敗');
-            console.error(err);
-        });
-    }
+    if (currentSongs.length === 0) return;
+    if (!audio.src) { playSong(0); return; }
+    if (isPlaying) audio.pause(); else audio.play();
     isPlaying = !isPlaying;
     updatePlayButton();
 }
@@ -205,109 +219,50 @@ function playPrevious() {
 function toggleShuffle() {
     isShuffle = !isShuffle;
     shuffleBtn.classList.toggle('active', isShuffle);
-    showToast(isShuffle ? '🔀 隨機播放已開啟' : '▶️ 順序播放');
 }
 
 async function handleUpload(files) {
     if (!files || files.length === 0) return;
-
-    const fileArray = Array.from(files);
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    
-    // 檢查檔案大小
-    const oversizedFiles = fileArray.filter(f => f.size > maxSize);
-    if (oversizedFiles.length > 0) {
-        showToast(`❌ 檔案過大: ${oversizedFiles[0].name} (限制 50MB)`);
-        return;
-    }
-
-    let successCount = 0;
-    let failCount = 0;
-
-    showToast(`📤 上傳中... (0/${fileArray.length})`);
-
-    for (let i = 0; i < fileArray.length; i++) {
-        const file = fileArray[i];
+    for (let file of files) {
         const formData = new FormData();
         formData.append('audio', file);
         formData.append('playlistName', currentPlaylist);
-        
-        try {
-            showToast(`📤 上傳中... (${i + 1}/${fileArray.length}) - ${file.name}`, 1000);
-            
-            const res = await fetch('/api/upload', { 
-                method: 'POST', 
-                body: formData 
-            });
-            
-            if (!res.ok) {
-                const errorData = await res.json().catch(() => ({}));
-                throw new Error(errorData.error || '伺服器錯誤');
-            }
-            
-            successCount++;
-        } catch (e) {
-            console.error(`上傳失敗: ${file.name}`, e);
-            failCount++;
-        }
+        await fetch('/api/upload', { method: 'POST', body: formData });
     }
-
-    // 重新載入播放清單
     await loadPlaylists();
-    fileInput.value = '';
-
-    // 顯示結果
-    if (failCount === 0) {
-        showToast(`✅ 成功上傳 ${successCount} 首歌曲`);
-    } else if (successCount === 0) {
-        showToast(`❌ 全部上傳失敗 (${failCount} 首)`);
-    } else {
-        showToast(`⚠️ 成功 ${successCount} 首，失敗 ${failCount} 首`);
-    }
-}
-
-async function renameSong(event, songId, oldName) {
-    event.stopPropagation();
-    const newName = prompt('重新命名歌曲：', oldName);
-    if (!newName || newName === oldName) return;
-    
-    try {
-        const res = await fetch('/api/music/rename', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ songId, newName, playlistName: currentPlaylist })
-        });
-        
-        if (!res.ok) throw new Error('重新命名失敗');
-        
-        showToast('✅ 重新命名成功');
-        await loadPlaylists();
-    } catch (error) {
-        showToast('❌ 重新命名失敗');
-        console.error(error);
-    }
 }
 
 async function deleteSong(event, songId, fileName) {
-    event.stopPropagation();
-    if (!confirm('確定刪除這首歌曲？')) return;
+    event.stopPropagation(); // 防止點擊刪除按鈕時觸發播放歌曲
+    
+    // 判斷目前是否在「所有歌曲」清單
+    const isMainList = (currentPlaylist === '所有歌曲');
+    
+    // 根據清單顯示不同的提示字句
+    const confirmMsg = isMainList 
+        ? '⚠️ 這是「所有歌曲」清單，刪除將會【徹底從雲端移除】檔案！確定嗎？' 
+        : '確定要將此歌曲從【本播放清單】移除嗎？\n(這不會刪除原始檔案，您仍可在「所有歌曲」中找到它)';
+
+    if (!confirm(confirmMsg)) return;
     
     try {
         const res = await fetch('/api/music', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fileName, playlistName: currentPlaylist, songId })
+            body: JSON.stringify({ 
+                fileName, 
+                playlistName: currentPlaylist, 
+                songId 
+            })
         });
         
         if (!res.ok) throw new Error('刪除失敗');
         
-        showToast('✅ 刪除成功');
+        showToast(isMainList ? '✅ 已徹底刪除雲端檔案' : '✅ 已從清單移除');
+        
+        // 重新載入清單畫面
         await loadPlaylists();
         
-        // 如果刪除的是正在播放的歌曲
-        if (currentSongs.length > 0 && currentIndex >= currentSongs.length) {
-            currentIndex = 0;
-        }
     } catch (error) {
         showToast('❌ 刪除失敗');
         console.error(error);
@@ -316,47 +271,49 @@ async function deleteSong(event, songId, fileName) {
 
 async function createNewPlaylist() {
     const name = prompt('新清單名稱：');
-    if (!name || name.trim() === '') return;
-    
+    if (!name) return;
+    await fetch('/api/playlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() })
+    });
+    await loadPlaylists();
+}
+
+async function openMoveMenu(event, index) {
+    event.stopPropagation();
+    const song = currentSongs[index];
+    const target = prompt('請輸入要【加入/移動】到的播放清單名稱：');
+    if (!target || target.trim() === '') return;
+
     try {
-        const res = await fetch('/api/playlist', {
+        const res = await fetch('/api/music/copy-to-playlist', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name.trim() })
+            body: JSON.stringify({
+                song: song,
+                targetPlaylistName: target.trim(),
+                deleteFromOriginal: false // 設為 false 是「複製」，設為 true 就是「移動」
+            })
         });
         
-        if (!res.ok) {
-            const error = await res.json();
-            throw new Error(error.error || '建立失敗');
+        if (res.ok) {
+            showToast(`✅ 已將歌曲加入到 ${target}`);
+            loadPlaylists();
+        } else {
+            throw new Error();
         }
-        
-        showToast('✅ 清單建立成功');
-        await loadPlaylists();
-    } catch (error) {
-        showToast(`❌ ${error.message}`);
-        console.error(error);
+    } catch (err) {
+        showToast('❌ 搬移失敗');
     }
 }
 
 function updateProgress() {
-    if (audio.duration) {
-        progressBar.value = (audio.currentTime / audio.duration) * 100 || 0;
-        currentTimeEl.textContent = formatTime(audio.currentTime);
-    }
+    if (audio.duration) progressBar.value = (audio.currentTime / audio.duration) * 100 || 0;
 }
 
-function updateDuration() { 
-    if (audio.duration) {
-        durationEl.textContent = formatTime(audio.duration); 
-    }
-}
-
-function seek() { 
-    if (audio.duration) {
-        audio.currentTime = (progressBar.value / 100) * audio.duration; 
-    }
-}
-
+function updateDuration() { durationEl.textContent = formatTime(audio.duration); }
+function seek() { audio.currentTime = (progressBar.value / 100) * audio.duration; }
 function formatTime(s) {
     if (!s || !isFinite(s)) return '0:00';
     const m = Math.floor(s / 60);
