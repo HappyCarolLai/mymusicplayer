@@ -1,14 +1,9 @@
 const express = require('express');
 const multer = require('multer');
 const { S3Client, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const { Upload } = require("@aws-sdk/lib-storage"); // 新增：支援串流上傳
+const { Upload } = require("@aws-sdk/lib-storage");
 const cors = require('cors');
 const mongoose = require('mongoose');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
-const { Readable, PassThrough } = require('stream');
-
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -38,7 +33,10 @@ const s3Client = new S3Client({
 });
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB 限制
+});
 
 // --- API ---
 
@@ -53,40 +51,28 @@ app.get('/api/playlists', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 修改後的 server.js 上傳部分
+// 上傳音樂（直接上傳，不做音量調整）
 app.post('/api/upload', upload.single('audio'), async (req, res) => {
   try {
     const { playlistName } = req.body;
 
-    // 【新增內容】：修正中文亂碼問題，將編碼從 latin1 轉回 utf8
+    // 修正中文亂碼問題
     const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     
-    // 【修正內容】：清理檔名，確保 URL 安全但保留正確的中文字元
-    // 我們先過濾掉一些可能導致 URL 報錯的特殊符號，但保留中文字
+    // 清理檔名
     const cleanName = originalName.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_');
     const safeFileName = `${Date.now()}-${cleanName}`; 
 
-    console.log(`開始處理串流: ${originalName}`);
+    console.log(`開始上傳: ${originalName}`);
 
-    // --- 以下保持不變 ---
-    const passThrough = new PassThrough();
-    const ffmpegCommand = ffmpeg(Readable.from(req.file.buffer))
-      .audioFilters('volume=0.5')
-      .format('mp3')
-      .on('error', (err) => {
-        console.error('FFmpeg 錯誤:', err.message);
-        passThrough.destroy();
-      });
-
-    ffmpegCommand.pipe(passThrough);
-
+    // 直接上傳原始音檔，不經過 FFmpeg 處理
     const parallelUploads3 = new Upload({
       client: s3Client,
       params: {
         Bucket: BUCKET_NAME,
         Key: safeFileName,
-        Body: passThrough,
-        ContentType: 'audio/mpeg',
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
       },
     });
 
