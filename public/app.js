@@ -39,10 +39,15 @@ function showToast(message, duration = 3000) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    //if ('serviceWorker' in navigator) {
+    //    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    //}
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
-    
+    navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(reg => reg.unregister());
+    });
+}
+
     await loadPlaylists();
     
     playBtn.addEventListener('click', togglePlay);
