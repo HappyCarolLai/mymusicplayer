@@ -53,31 +53,33 @@ app.get('/api/playlists', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 上傳音樂 + 串流處理音量 50%
+// 修改後的 server.js 上傳部分
 app.post('/api/upload', upload.single('audio'), async (req, res) => {
   try {
     const { playlistName } = req.body;
-    const originalName = req.file.originalname;
-    const safeFileName = `${Date.now()}-${encodeURIComponent(originalName)}`;
+
+    // 【新增內容】：修正中文亂碼問題，將編碼從 latin1 轉回 utf8
+    const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    
+    // 【修正內容】：清理檔名，確保 URL 安全但保留正確的中文字元
+    // 我們先過濾掉一些可能導致 URL 報錯的特殊符號，但保留中文字
+    const cleanName = originalName.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_');
+    const safeFileName = `${Date.now()}-${cleanName}`; 
 
     console.log(`開始處理串流: ${originalName}`);
 
-    // 建立一個轉換流，作為 FFmpeg 與 R2 的橋樑
+    // --- 以下保持不變 ---
     const passThrough = new PassThrough();
-
-    // 啟動 FFmpeg
     const ffmpegCommand = ffmpeg(Readable.from(req.file.buffer))
       .audioFilters('volume=0.5')
       .format('mp3')
       .on('error', (err) => {
-        console.error('FFmpeg 處理出錯:', err.message);
+        console.error('FFmpeg 錯誤:', err.message);
         passThrough.destroy();
       });
 
-    // 將 FFmpeg 結果導向 passThrough
     ffmpegCommand.pipe(passThrough);
 
-    // 使用 Upload 套件進行串流上傳至 R2
     const parallelUploads3 = new Upload({
       client: s3Client,
       params: {
@@ -89,10 +91,15 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
     });
 
     await parallelUploads3.done();
-    console.log('R2 上傳完成');
 
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${safeFileName}`;
-    const newSong = { id: Date.now().toString(), name: originalName, url: publicUrl, fileName: safeFileName };
+    const publicUrl = `${process.env.R2_PUBLIC_URL}/${encodeURIComponent(safeFileName)}`;
+    
+    const newSong = { 
+        id: Date.now().toString(), 
+        name: originalName, 
+        url: publicUrl, 
+        fileName: safeFileName 
+    };
 
     await Playlist.findOneAndUpdate(
       { name: playlistName || 'default' },
@@ -102,7 +109,7 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
 
     res.json({ success: true, song: newSong });
   } catch (err) {
-    console.error('上傳流程失敗:', err);
+    console.error('上傳失敗:', err);
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
