@@ -1,11 +1,11 @@
 {
-  "name": "私人音樂播放器",
-  "short_name": "音樂",
-  "description": "個人音樂播放器",
+  "name": "音巢",
+  "short_name": "音巢",
+  "description": "私人音樂播放器",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#1DB954",
+  "background_color": "#0F1B2E",
+  "theme_color": "#4DD0E1",
   "orientation": "portrait",
   "icons": [
     {

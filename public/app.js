@@ -1,14 +1,19 @@
-let currentPlaylist = '所有歌曲'; // 修改預設清單名稱
+let currentPlaylist = '所有歌曲';
+let allPlaylists = {};
 let currentSongs = [];
 let currentIndex = 0;
 let isPlaying = false;
 let isShuffle = false;
+let repeatMode = 0; // 0: 不循環, 1: 單曲循環, 2: 列表循環
+let selectedSongs = new Set();
+let batchMode = false;
 
 const audio = document.getElementById('audioPlayer');
 const playBtn = document.getElementById('playBtn');
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const shuffleBtn = document.getElementById('shuffleBtn');
+const repeatBtn = document.getElementById('repeatBtn');
 const progressBar = document.getElementById('progressBar');
 const nowPlaying = document.getElementById('nowPlaying');
 const currentTimeEl = document.getElementById('currentTime');
@@ -18,8 +23,13 @@ const playlistSelector = document.getElementById('playlistSelector');
 const uploadBtn = document.getElementById('uploadBtn');
 const fileInput = document.getElementById('fileInput');
 const newPlaylistBtn = document.getElementById('newPlaylistBtn');
+const renamePlaylistBtn = document.getElementById('renamePlaylistBtn');
+const deletePlaylistBtn = document.getElementById('deletePlaylistBtn');
+const batchActionBar = document.getElementById('batchActionBar');
+const selectedCount = document.getElementById('selectedCount');
+const addToPlaylistBtn = document.getElementById('addToPlaylistBtn');
+const cancelBatchBtn = document.getElementById('cancelBatchBtn');
 
-// Toast 提示函數
 function showToast(message, duration = 3000) {
     const existingToast = document.querySelector('.upload-toast');
     if (existingToast) existingToast.remove();
@@ -36,7 +46,6 @@ function showToast(message, duration = 3000) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // 註銷舊的 Service Worker 以確保更新
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(regs => {
             regs.forEach(reg => reg.unregister());
@@ -49,15 +58,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     prevBtn.addEventListener('click', playPrevious);
     nextBtn.addEventListener('click', playNext);
     shuffleBtn.addEventListener('click', toggleShuffle);
+    repeatBtn.addEventListener('click', toggleRepeat);
     progressBar.addEventListener('input', seek);
     playlistSelector.addEventListener('change', handlePlaylistChange);
     uploadBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', (e) => handleUpload(e.target.files));
     newPlaylistBtn.addEventListener('click', createNewPlaylist);
+    renamePlaylistBtn.addEventListener('click', renamePlaylist);
+    deletePlaylistBtn.addEventListener('click', deletePlaylist);
+    addToPlaylistBtn.addEventListener('click', showAddToPlaylistDialog);
+    cancelBatchBtn.addEventListener('click', exitBatchMode);
     
     audio.addEventListener('timeupdate', updateProgress);
     audio.addEventListener('loadedmetadata', updateDuration);
-    audio.addEventListener('ended', playNext); 
+    audio.addEventListener('ended', handleSongEnded);
 
     if ('mediaSession' in navigator) {
         navigator.mediaSession.setActionHandler('play', togglePlay);
@@ -69,39 +83,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadPlaylists() {
     try {
-        const res = await fetch('/api/playlists');
+        const res = await fetch('/api/playlists?t=' + Date.now());
         if (!res.ok) throw new Error('無法載入播放清單');
         
         const data = await res.json();
-        // 如果原本存的是 default，自動轉向「所有歌曲」
+        allPlaylists = data.playlists;
         const selected = playlistSelector.value || '所有歌曲';
         
         playlistSelector.innerHTML = '';
-        Object.keys(data.playlists).forEach(name => {
+        Object.keys(allPlaylists).forEach(name => {
             const opt = document.createElement('option');
-            // 將後端可能傳回的 'default' 顯示為 '所有歌曲'
-            const displayName = (name === 'default' || name === '所有歌曲') ? '所有歌曲' : name;
-            opt.value = name; 
-            opt.textContent = (displayName === '所有歌曲') ? '🏠 所有歌曲' : `📁 ${displayName}`;
+            opt.value = name;
+            opt.textContent = name === '所有歌曲' ? '🏠 所有歌曲' : `📁 ${name}`;
             opt.selected = (name === selected);
             playlistSelector.appendChild(opt);
         });
         
         currentPlaylist = selected;
-        currentSongs = data.playlists[currentPlaylist] || [];
+        currentSongs = allPlaylists[currentPlaylist] || [];
         renderSongList();
+        updatePlaylistButtons();
     } catch (error) {
         showToast('❌ 載入播放清單失敗');
         console.error(error);
     }
 }
 
+function updatePlaylistButtons() {
+    const isAllSongs = currentPlaylist === '所有歌曲';
+    renamePlaylistBtn.style.display = isAllSongs ? 'none' : 'inline-flex';
+    deletePlaylistBtn.style.display = isAllSongs ? 'none' : 'inline-flex';
+}
+
 async function handlePlaylistChange(e) {
     currentPlaylist = e.target.value;
     await loadPlaylists();
-    audio.pause();
-    isPlaying = false;
-    updatePlayButton();
+    exitBatchMode();
 }
 
 function renderSongList() {
@@ -116,54 +133,47 @@ function renderSongList() {
         return;
     }
 
-    songList.innerHTML = currentSongs.map((song, index) => `
-        <div class="song-item ${index === currentIndex && isPlaying ? 'playing' : ''}" onclick="playSong(${index})">
-            <div class="song-album-art"></div> 
-            <div class="song-info">
-                <div class="song-name">${escapeHtml(song.name)}</div>
-                <div class="song-duration">音樂</div>
+    const isAllSongs = currentPlaylist === '所有歌曲';
+    
+    songList.innerHTML = currentSongs.map((song, index) => {
+        const isSelected = selectedSongs.has(song.id);
+        return `
+            <div class="song-item ${index === currentIndex && isPlaying ? 'playing' : ''} ${isSelected ? 'selected' : ''}" 
+                 data-song-id="${song.id}"
+                 onclick="handleSongClick('${song.id}', ${index})">
+                ${batchMode ? `<input type="checkbox" class="song-checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleSongSelect('${song.id}')">` : ''}
+                <div class="song-album-art">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                </div>
+                <div class="song-info">
+                    <div class="song-name">${escapeHtml(song.name)}</div>
+                    <div class="song-duration">音樂</div>
+                </div>
+                ${!batchMode ? `
+                    <div class="song-actions">
+                        ${isAllSongs ? '' : `
+                            <button class="action-btn" onclick="event.stopPropagation(); addSingleToPlaylist('${song.id}')" title="添加到其他清單">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                            </button>
+                        `}
+                        <button class="action-btn delete" onclick="event.stopPropagation(); deleteSong('${song.id}')" title="${isAllSongs ? '刪除' : '從清單移除'}">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                ${isAllSongs ? 
+                                    '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>' :
+                                    '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+                                }
+                            </svg>
+                        </button>
+                    </div>
+                ` : ''}
             </div>
-            <div class="song-actions">
-                <button class="move-btn" onclick="openMoveMenu(event, ${index})" title="加入到清單">➕</button>
-                <button class="delete-btn" onclick="deleteSong(event, '${song.id}', '${escapeHtml(song.fileName)}')" title="刪除">🗑️</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-// 刪除重複的 openMoveMenu，統一使用這一個版本
-async function openMoveMenu(event, index) {
-    event.stopPropagation();
-    const song = currentSongs[index];
-    const target = prompt('請輸入要【加入/移動】到的播放清單名稱：');
-    if (!target || target.trim() === '') return;
-
-    // 這裡可以加一個防呆：如果目標就是當前清單，提醒使用者
-    if (target.trim() === currentPlaylist) {
-        showToast('⚠️ 歌曲已在該清單中');
-        return;
-    }
-
-    try {
-        const res = await fetch('/api/music/copy-to-playlist', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                song: song,
-                targetPlaylistName: target.trim(),
-                deleteFromOriginal: false 
-            })
-        });
-        
-        if (res.ok) {
-            showToast(`✅ 已將歌曲加入到 ${target}`);
-            await loadPlaylists(); // 重新載入以更新下拉選單
-        } else {
-            throw new Error();
-        }
-    } catch (err) {
-        showToast('❌ 搬移失敗');
-    }
+        `;
+    }).join('');
 }
 
 function escapeHtml(text) {
@@ -172,7 +182,129 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ... (其餘 playSong, togglePlay, handleUpload 等函式保持不變) ...
+function handleSongClick(songId, index) {
+    if (batchMode) {
+        toggleSongSelect(songId);
+    } else {
+        playSong(index);
+    }
+}
+
+function toggleSongSelect(songId) {
+    if (selectedSongs.has(songId)) {
+        selectedSongs.delete(songId);
+    } else {
+        selectedSongs.add(songId);
+    }
+    selectedCount.textContent = `已選擇 ${selectedSongs.size} 首`;
+    renderSongList();
+}
+
+function enterBatchMode() {
+    if (currentPlaylist !== '所有歌曲') {
+        showToast('⚠️ 批量操作僅在「所有歌曲」中可用');
+        return;
+    }
+    batchMode = true;
+    selectedSongs.clear();
+    batchActionBar.style.display = 'flex';
+    renderSongList();
+}
+
+function exitBatchMode() {
+    batchMode = false;
+    selectedSongs.clear();
+    batchActionBar.style.display = 'none';
+    renderSongList();
+}
+
+async function addSingleToPlaylist(songId) {
+    selectedSongs.clear();
+    selectedSongs.add(songId);
+    await showAddToPlaylistDialog();
+    selectedSongs.clear();
+}
+
+async function showAddToPlaylistDialog() {
+    if (selectedSongs.size === 0) {
+        showToast('⚠️ 請先選擇歌曲');
+        return;
+    }
+
+    const otherPlaylists = Object.keys(allPlaylists).filter(name => name !== '所有歌曲' && name !== currentPlaylist);
+    
+    if (otherPlaylists.length === 0) {
+        if (confirm('還沒有其他播放清單，是否建立新清單？')) {
+            await createNewPlaylist();
+        }
+        return;
+    }
+
+    const playlistOptions = otherPlaylists.map((name, i) => `${i + 1}. ${name}`).join('\n');
+    const input = prompt(`輸入清單編號或名稱：\n\n${playlistOptions}`);
+    
+    if (!input) return;
+    
+    let targetPlaylist;
+    const num = parseInt(input);
+    if (!isNaN(num) && num > 0 && num <= otherPlaylists.length) {
+        targetPlaylist = otherPlaylists[num - 1];
+    } else {
+        targetPlaylist = input.trim();
+    }
+    
+    if (!allPlaylists[targetPlaylist]) {
+        showToast('❌ 播放清單不存在');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/playlist/add-songs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                playlistName: targetPlaylist, 
+                songIds: Array.from(selectedSongs) 
+            })
+        });
+        
+        if (!res.ok) throw new Error('添加失敗');
+        
+        showToast(`✅ 已添加 ${selectedSongs.size} 首到「${targetPlaylist}」`);
+        exitBatchMode();
+        await loadPlaylists();
+    } catch (error) {
+        showToast('❌ 添加失敗');
+        console.error(error);
+    }
+}
+
+// 長按進入批量模式
+let pressTimer;
+songList.addEventListener('touchstart', (e) => {
+    const songItem = e.target.closest('.song-item');
+    if (songItem && currentPlaylist === '所有歌曲' && !batchMode) {
+        pressTimer = setTimeout(() => {
+            const songId = songItem.dataset.songId;
+            enterBatchMode();
+            toggleSongSelect(songId);
+        }, 500);
+    }
+});
+
+songList.addEventListener('touchend', () => {
+    clearTimeout(pressTimer);
+});
+
+songList.addEventListener('contextmenu', (e) => {
+    const songItem = e.target.closest('.song-item');
+    if (songItem && currentPlaylist === '所有歌曲' && !batchMode) {
+        e.preventDefault();
+        const songId = songItem.dataset.songId;
+        enterBatchMode();
+        toggleSongSelect(songId);
+    }
+});
 
 function playSong(index) {
     if (currentSongs.length === 0) return;
@@ -187,12 +319,36 @@ function playSong(index) {
     nowPlaying.textContent = song.name;
     updatePlayButton();
     renderSongList();
+
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: song.name,
+            artist: '音巢',
+            album: currentPlaylist,
+            artwork: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
+        });
+    }
 }
 
 function togglePlay() {
-    if (currentSongs.length === 0) return;
-    if (!audio.src) { playSong(0); return; }
-    if (isPlaying) audio.pause(); else audio.play();
+    if (currentSongs.length === 0) {
+        showToast('⚠️ 請先上傳音樂');
+        return;
+    }
+    
+    if (!audio.src) {
+        playSong(0);
+        return;
+    }
+    
+    if (isPlaying) {
+        audio.pause();
+    } else {
+        audio.play().catch(err => {
+            showToast('❌ 播放失敗');
+            console.error(err);
+        });
+    }
     isPlaying = !isPlaying;
     updatePlayButton();
 }
@@ -204,9 +360,31 @@ function updatePlayButton() {
     pauseIcon.style.display = isPlaying ? 'block' : 'none';
 }
 
+function handleSongEnded() {
+    if (repeatMode === 1) {
+        audio.currentTime = 0;
+        audio.play();
+    } else if (repeatMode === 2 || isShuffle) {
+        playNext();
+    } else {
+        if (currentIndex < currentSongs.length - 1) {
+            playNext();
+        } else {
+            isPlaying = false;
+            updatePlayButton();
+        }
+    }
+}
+
 function playNext() {
     if (currentSongs.length === 0) return;
-    currentIndex = isShuffle ? Math.floor(Math.random() * currentSongs.length) : (currentIndex + 1) % currentSongs.length;
+    
+    if (isShuffle) {
+        currentIndex = Math.floor(Math.random() * currentSongs.length);
+    } else {
+        currentIndex = (currentIndex + 1) % currentSongs.length;
+    }
+    
     playSong(currentIndex);
 }
 
@@ -219,29 +397,90 @@ function playPrevious() {
 function toggleShuffle() {
     isShuffle = !isShuffle;
     shuffleBtn.classList.toggle('active', isShuffle);
+    if (isShuffle && repeatMode === 1) {
+        repeatMode = 0;
+        updateRepeatButton();
+    }
+    showToast(isShuffle ? '🔀 隨機播放已開啟' : '▶️ 順序播放');
+}
+
+function toggleRepeat() {
+    repeatMode = (repeatMode + 1) % 3;
+    updateRepeatButton();
+    
+    const messages = ['🔁 循環關閉', '🔂 單曲循環', '🔁 列表循環'];
+    showToast(messages[repeatMode]);
+    
+    if (repeatMode === 1 && isShuffle) {
+        isShuffle = false;
+        shuffleBtn.classList.remove('active');
+    }
+}
+
+function updateRepeatButton() {
+    repeatBtn.classList.toggle('active', repeatMode > 0);
+    repeatBtn.style.opacity = repeatMode === 0 ? '0.5' : '1';
 }
 
 async function handleUpload(files) {
     if (!files || files.length === 0) return;
-    for (let file of files) {
+
+    const fileArray = Array.from(files);
+    const maxSize = 50 * 1024 * 1024;
+    
+    const oversizedFiles = fileArray.filter(f => f.size > maxSize);
+    if (oversizedFiles.length > 0) {
+        showToast(`❌ 檔案過大: ${oversizedFiles[0].name} (限制 50MB)`);
+        return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    showToast(`📤 上傳中... (0/${fileArray.length})`);
+
+    for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
         const formData = new FormData();
         formData.append('audio', file);
-        formData.append('playlistName', currentPlaylist);
-        await fetch('/api/upload', { method: 'POST', body: formData });
+        
+        try {
+            showToast(`📤 上傳中... (${i + 1}/${fileArray.length}) - ${file.name}`, 1000);
+            
+            const res = await fetch('/api/upload', { 
+                method: 'POST', 
+                body: formData 
+            });
+            
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.error || '伺服器錯誤');
+            }
+            
+            successCount++;
+        } catch (e) {
+            console.error(`上傳失敗: ${file.name}`, e);
+            failCount++;
+        }
     }
+
     await loadPlaylists();
+    fileInput.value = '';
+
+    if (failCount === 0) {
+        showToast(`✅ 成功上傳 ${successCount} 首歌曲`);
+    } else if (successCount === 0) {
+        showToast(`❌ 全部上傳失敗 (${failCount} 首)`);
+    } else {
+        showToast(`⚠️ 成功 ${successCount} 首，失敗 ${failCount} 首`);
+    }
 }
 
-async function deleteSong(event, songId, fileName) {
-    event.stopPropagation(); // 防止點擊刪除按鈕時觸發播放歌曲
-    
-    // 判斷目前是否在「所有歌曲」清單
-    const isMainList = (currentPlaylist === '所有歌曲');
-    
-    // 根據清單顯示不同的提示字句
-    const confirmMsg = isMainList 
-        ? '⚠️ 這是「所有歌曲」清單，刪除將會【徹底從雲端移除】檔案！確定嗎？' 
-        : '確定要將此歌曲從【本播放清單】移除嗎？\n(這不會刪除原始檔案，您仍可在「所有歌曲」中找到它)';
+async function deleteSong(songId) {
+    const isAllSongs = currentPlaylist === '所有歌曲';
+    const confirmMsg = isAllSongs 
+        ? '⚠️ 這將從雲端永久刪除檔案，確定嗎？' 
+        : '確定從此清單移除？（不會刪除檔案）';
 
     if (!confirm(confirmMsg)) return;
     
@@ -249,20 +488,17 @@ async function deleteSong(event, songId, fileName) {
         const res = await fetch('/api/music', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                fileName, 
-                playlistName: currentPlaylist, 
-                songId 
-            })
+            body: JSON.stringify({ songId, playlistName: currentPlaylist })
         });
         
         if (!res.ok) throw new Error('刪除失敗');
         
-        showToast(isMainList ? '✅ 已徹底刪除雲端檔案' : '✅ 已從清單移除');
-        
-        // 重新載入清單畫面
+        showToast(isAllSongs ? '✅ 已徹底刪除雲端檔案' : '✅ 已從清單移除');
         await loadPlaylists();
         
+        if (currentSongs.length > 0 && currentIndex >= currentSongs.length) {
+            currentIndex = 0;
+        }
     } catch (error) {
         showToast('❌ 刪除失敗');
         console.error(error);
@@ -271,49 +507,96 @@ async function deleteSong(event, songId, fileName) {
 
 async function createNewPlaylist() {
     const name = prompt('新清單名稱：');
-    if (!name) return;
-    await fetch('/api/playlist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() })
-    });
-    await loadPlaylists();
-}
-
-async function openMoveMenu(event, index) {
-    event.stopPropagation();
-    const song = currentSongs[index];
-    const target = prompt('請輸入要【加入/移動】到的播放清單名稱：');
-    if (!target || target.trim() === '') return;
-
+    if (!name || name.trim() === '') return;
+    
     try {
-        const res = await fetch('/api/music/copy-to-playlist', {
+        const res = await fetch('/api/playlist', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                song: song,
-                targetPlaylistName: target.trim(),
-                deleteFromOriginal: false // 設為 false 是「複製」，設為 true 就是「移動」
-            })
+            body: JSON.stringify({ name: name.trim() })
         });
         
-        if (res.ok) {
-            showToast(`✅ 已將歌曲加入到 ${target}`);
-            loadPlaylists();
-        } else {
-            throw new Error();
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.error || '建立失敗');
         }
-    } catch (err) {
-        showToast('❌ 搬移失敗');
+        
+        showToast('✅ 清單建立成功');
+        await loadPlaylists();
+    } catch (error) {
+        showToast(`❌ ${error.message}`);
+        console.error(error);
+    }
+}
+
+async function renamePlaylist() {
+    const newName = prompt('重新命名清單：', currentPlaylist);
+    if (!newName || newName === currentPlaylist) return;
+    
+    try {
+        const res = await fetch('/api/playlist/rename', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oldName: currentPlaylist, newName })
+        });
+        
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.error || '重新命名失敗');
+        }
+        
+        showToast('✅ 重新命名成功');
+        currentPlaylist = newName;
+        await loadPlaylists();
+    } catch (error) {
+        showToast(`❌ ${error.message}`);
+        console.error(error);
+    }
+}
+
+async function deletePlaylist() {
+    if (!confirm(`確定刪除「${currentPlaylist}」清單？（不會刪除音樂檔案）`)) return;
+    
+    try {
+        const res = await fetch('/api/playlist', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: currentPlaylist })
+        });
+        
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.error || '刪除失敗');
+        }
+        
+        showToast('✅ 清單已刪除');
+        currentPlaylist = '所有歌曲';
+        await loadPlaylists();
+    } catch (error) {
+        showToast(`❌ ${error.message}`);
+        console.error(error);
     }
 }
 
 function updateProgress() {
-    if (audio.duration) progressBar.value = (audio.currentTime / audio.duration) * 100 || 0;
+    if (audio.duration) {
+        progressBar.value = (audio.currentTime / audio.duration) * 100 || 0;
+        currentTimeEl.textContent = formatTime(audio.currentTime);
+    }
 }
 
-function updateDuration() { durationEl.textContent = formatTime(audio.duration); }
-function seek() { audio.currentTime = (progressBar.value / 100) * audio.duration; }
+function updateDuration() { 
+    if (audio.duration) {
+        durationEl.textContent = formatTime(audio.duration); 
+    }
+}
+
+function seek() { 
+    if (audio.duration) {
+        audio.currentTime = (progressBar.value / 100) * audio.duration; 
+    }
+}
+
 function formatTime(s) {
     if (!s || !isFinite(s)) return '0:00';
     const m = Math.floor(s / 60);
