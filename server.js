@@ -64,9 +64,9 @@ const upload = multer({
 
 // --- 初始化函數 ---
 async function ensureAllSongsPlaylist() {
-  const existing = await Playlist.findOne({ name: '所有歌曲' });
+  const existing = await Playlist.findOne({ name: '已上傳歌曲清單' });
   if (!existing) {
-    await Playlist.create({ name: '所有歌曲', songIds: [] });
+    await Playlist.create({ name: '已上傳歌曲清單', songIds: [] });
   }
 }
 
@@ -134,9 +134,9 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
       fileName: safeFileName 
     });
 
-    // 加入「所有歌曲」清單
+    // 加入「已上傳歌曲清單」清單
     await Playlist.findOneAndUpdate(
-      { name: '所有歌曲' },
+      { name: '已上傳歌曲清單' },
       { $push: { songIds: songId } },
       { upsert: true }
     );
@@ -167,13 +167,13 @@ app.put('/api/music/rename', async (req, res) => {
   }
 });
 
-// 從「所有歌曲」刪除（真正刪除）
+// 從「已上傳歌曲清單」刪除（真正刪除）
 app.delete('/api/music', async (req, res) => {
   try {
     const { songId, playlistName } = req.body;
     
-    if (playlistName === '所有歌曲') {
-      // 從所有歌曲刪除 = 徹底刪除
+    if (playlistName === '已上傳歌曲清單') {
+      // 從已上傳歌曲清單刪除 = 徹底刪除
       const song = await Song.findOne({ id: songId });
       if (!song) {
         return res.status(404).json({ error: '歌曲不存在' });
@@ -233,7 +233,7 @@ app.post('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
     
-    if (name === '所有歌曲') {
+    if (name === '已上傳歌曲清單') {
       return res.status(400).json({ error: '此名稱為保留名稱' });
     }
 
@@ -249,11 +249,11 @@ app.put('/api/playlist/rename', async (req, res) => {
   try {
     const { oldName, newName } = req.body;
     
-    if (oldName === '所有歌曲') {
-      return res.status(400).json({ error: '無法重命名「所有歌曲」' });
+    if (oldName === '已上傳歌曲清單') {
+      return res.status(400).json({ error: '無法重命名「已上傳歌曲清單」' });
     }
 
-    if (newName === '所有歌曲') {
+    if (newName === '已上傳歌曲清單') {
       return res.status(400).json({ error: '此名稱為保留名稱' });
     }
 
@@ -274,8 +274,8 @@ app.delete('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
     
-    if (name === '所有歌曲') {
-      return res.status(400).json({ error: '無法刪除「所有歌曲」' });
+    if (name === '已上傳歌曲清單') {
+      return res.status(400).json({ error: '無法刪除「已上傳歌曲清單」' });
     }
 
     await Playlist.deleteOne({ name });

@@ -16,33 +16,41 @@
         <div class="top-controls">
             <div class="playlist-header">
                 <select id="playlistSelector" class="playlist-selector">
-                    <option value="所有歌曲">🏠 所有歌曲</option>
+                    <option value="已上傳歌曲清單">已上傳歌曲清單</option>
                 </select>
                 <div class="header-buttons">
                     <button id="renamePlaylistBtn" class="icon-btn" title="重命名清單" style="display: none;">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                         </svg>
                     </button>
                     <button id="deletePlaylistBtn" class="icon-btn" title="刪除清單" style="display: none;">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="3 6 5 6 21 6"/>
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
                         </svg>
                     </button>
                     <button id="newPlaylistBtn" class="icon-btn" title="新增清單">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="12" y1="5" x2="12" y2="19"/>
                             <line x1="5" y1="12" x2="19" y2="12"/>
                         </svg>
                     </button>
-                    <button id="uploadBtn" class="icon-btn" title="上傳音樂">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button id="uploadBtn" class="icon-btn upload-btn" title="上傳音樂">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                             <polyline points="17 8 12 3 7 8"/>
                             <line x1="12" y1="3" x2="12" y2="15"/>
                         </svg>
+                        <span class="btn-text">上傳</span>
+                    </button>
+                    <button id="addToListBtn" class="icon-btn add-btn" title="將歌曲加入清單" style="display: none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        <span class="btn-text">加入清單</span>
                     </button>
                 </div>
             </div>
@@ -52,9 +60,12 @@
         <!-- 歌曲清單 -->
         <div class="song-list" id="songList">
             <div class="empty-state">
-                <div class="empty-icon">🎵</div>
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
+                    <circle cx="12" cy="12" r="10"/>
+                    <circle cx="12" cy="12" r="3"/>
+                </svg>
                 <div class="empty-text">還沒有音樂</div>
-                <div class="empty-hint">點擊上方按鈕上傳</div>
+                <div class="empty-hint">點擊上方上傳按鈕</div>
             </div>
         </div>
 
