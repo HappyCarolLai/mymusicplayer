@@ -27,7 +27,13 @@ app.use((req, res, next) => {
 
 // --- MongoDB ---
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB Connected'))
+  .then(async () => {
+    console.log('✅ MongoDB Connected');
+    // 執行資料遷移
+    await migrateOldData();
+    // 確保已上傳歌曲清單存在
+    await ensureAllSongsPlaylist();
+  })
   .catch(err => console.error('❌ MongoDB Error:', err));
 
 // 歌曲主資料庫（儲存實際檔案資訊）
@@ -67,6 +73,74 @@ async function ensureAllSongsPlaylist() {
   const existing = await Playlist.findOne({ name: '已上傳歌曲清單' });
   if (!existing) {
     await Playlist.create({ name: '已上傳歌曲清單', songIds: [] });
+  }
+}
+
+// 遷移舊資料架構到新架構
+async function migrateOldData() {
+  try {
+    // 檢查是否有舊資料（包含 songs 欄位的播放清單）
+    const oldPlaylists = await Playlist.find({ songs: { $exists: true, $ne: [] } });
+    
+    if (oldPlaylists.length === 0) {
+      console.log('✅ 沒有需要遷移的舊資料');
+      return;
+    }
+
+    console.log(`🔄 發現 ${oldPlaylists.length} 個播放清單需要遷移...`);
+
+    for (const playlist of oldPlaylists) {
+      // 跳過已經遷移過的（同時有 songs 和 songIds）
+      if (playlist.songIds && playlist.songIds.length > 0) {
+        continue;
+      }
+
+      console.log(`   處理播放清單: ${playlist.name}`);
+      const songIds = [];
+
+      for (const oldSong of playlist.songs) {
+        // 檢查這首歌是否已經在 Song 資料庫中
+        let song = await Song.findOne({ fileName: oldSong.fileName });
+        
+        if (!song) {
+          // 如果不存在，創建新的 Song 記錄
+          song = await Song.create({
+            id: oldSong.id || Date.now().toString(),
+            name: oldSong.name,
+            url: oldSong.url,
+            fileName: oldSong.fileName
+          });
+          console.log(`      新增歌曲: ${song.name}`);
+        }
+
+        songIds.push(song.id);
+      }
+
+      // 更新播放清單為新架構
+      await Playlist.updateOne(
+        { _id: playlist._id },
+        { 
+          $set: { songIds: songIds },
+          $unset: { songs: "" }
+        }
+      );
+
+      console.log(`   ✅ ${playlist.name} 遷移完成 (${songIds.length} 首歌)`);
+    }
+
+    // 處理「所有歌曲」清單重命名
+    const oldAllSongs = await Playlist.findOne({ name: '所有歌曲' });
+    if (oldAllSongs) {
+      await Playlist.updateOne(
+        { name: '所有歌曲' },
+        { $set: { name: '已上傳歌曲清單' } }
+      );
+      console.log('✅ 已將「所有歌曲」重命名為「已上傳歌曲清單」');
+    }
+
+    console.log('🎉 資料遷移完成！');
+  } catch (err) {
+    console.error('❌ 資料遷移失敗:', err);
   }
 }
 

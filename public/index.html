@@ -15,9 +15,14 @@
         <!-- 頂部控制區 -->
         <div class="top-controls">
             <div class="playlist-header">
-                <select id="playlistSelector" class="playlist-selector">
-                    <option value="已上傳歌曲清單">已上傳歌曲清單</option>
-                </select>
+                <div class="playlist-selector-wrapper">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="playlist-icon" id="playlistIcon">
+                        <path d="M3 12h18M3 6h18M3 18h18"/>
+                    </svg>
+                    <select id="playlistSelector" class="playlist-selector">
+                        <option value="已上傳歌曲清單">已上傳歌曲清單</option>
+                    </select>
+                </div>
                 <div class="header-buttons">
                     <button id="renamePlaylistBtn" class="icon-btn" title="重命名清單" style="display: none;">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
