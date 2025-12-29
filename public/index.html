@@ -48,14 +48,6 @@
                             <polyline points="17 8 12 3 7 8"/>
                             <line x1="12" y1="3" x2="12" y2="15"/>
                         </svg>
-                        <span class="btn-text">上傳</span>
-                    </button>
-                    <button id="addToListBtn" class="icon-btn add-btn" title="將歌曲加入清單" style="display: none;">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        <span class="btn-text">加入清單</span>
                     </button>
                 </div>
             </div>
@@ -77,14 +69,24 @@
         <!-- 批量操作浮動按鈕 -->
         <div id="batchActionBar" class="batch-action-bar" style="display: none;">
             <span id="selectedCount" class="selected-count">已選擇 0 首</span>
-            <button id="addToPlaylistBtn" class="batch-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19"/>
-                    <line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-                添加到清單
-            </button>
-            <button id="cancelBatchBtn" class="batch-btn cancel">取消</button>
+            <div class="batch-actions">
+                <button id="addToPlaylistBtn" class="batch-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    添加到清單
+                </button>
+                <button id="cancelBatchBtn" class="batch-btn cancel">取消</button>
+            </div>
+        </div>
+
+        <!-- 添加到清單的下拉選單 -->
+        <div id="playlistDropdown" class="playlist-dropdown" style="display: none;">
+            <div class="dropdown-content">
+                <div class="dropdown-header">選擇播放清單</div>
+                <div id="playlistOptions" class="playlist-options"></div>
+            </div>
         </div>
 
         <!-- 播放器控制區 -->

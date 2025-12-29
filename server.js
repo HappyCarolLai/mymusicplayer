@@ -29,23 +29,22 @@ app.use((req, res, next) => {
 mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
     console.log('✅ MongoDB Connected');
-    // 執行資料遷移
     await migrateOldData();
-    // 確保已上傳歌曲清單存在
     await ensureAllSongsPlaylist();
   })
   .catch(err => console.error('❌ MongoDB Error:', err));
 
-// 歌曲主資料庫（儲存實際檔案資訊）
+// 歌曲主資料庫
 const Song = mongoose.model('Song', new mongoose.Schema({
   id: { type: String, unique: true, required: true },
   name: { type: String, required: true },
   url: { type: String, required: true },
   fileName: { type: String, required: true },
+  coverUrl: { type: String },
   uploadedAt: { type: Date, default: Date.now }
 }));
 
-// 播放清單（只儲存歌曲 ID 引用）
+// 播放清單
 const Playlist = mongoose.model('Playlist', new mongoose.Schema({
   name: { type: String, unique: true, required: true },
   songIds: [String],
@@ -79,7 +78,6 @@ async function ensureAllSongsPlaylist() {
 // 遷移舊資料架構到新架構
 async function migrateOldData() {
   try {
-    // 檢查是否有舊資料（包含 songs 欄位的播放清單）
     const oldPlaylists = await Playlist.find({ songs: { $exists: true, $ne: [] } });
     
     if (oldPlaylists.length === 0) {
@@ -90,7 +88,6 @@ async function migrateOldData() {
     console.log(`🔄 發現 ${oldPlaylists.length} 個播放清單需要遷移...`);
 
     for (const playlist of oldPlaylists) {
-      // 跳過已經遷移過的（同時有 songs 和 songIds）
       if (playlist.songIds && playlist.songIds.length > 0) {
         continue;
       }
@@ -99,16 +96,15 @@ async function migrateOldData() {
       const songIds = [];
 
       for (const oldSong of playlist.songs) {
-        // 檢查這首歌是否已經在 Song 資料庫中
         let song = await Song.findOne({ fileName: oldSong.fileName });
         
         if (!song) {
-          // 如果不存在，創建新的 Song 記錄
           song = await Song.create({
             id: oldSong.id || Date.now().toString(),
             name: oldSong.name,
             url: oldSong.url,
-            fileName: oldSong.fileName
+            fileName: oldSong.fileName,
+            coverUrl: oldSong.coverUrl || null
           });
           console.log(`      新增歌曲: ${song.name}`);
         }
@@ -116,7 +112,6 @@ async function migrateOldData() {
         songIds.push(song.id);
       }
 
-      // 更新播放清單為新架構
       await Playlist.updateOne(
         { _id: playlist._id },
         { 
@@ -128,7 +123,6 @@ async function migrateOldData() {
       console.log(`   ✅ ${playlist.name} 遷移完成 (${songIds.length} 首歌)`);
     }
 
-    // 處理「所有歌曲」清單重命名
     const oldAllSongs = await Playlist.findOne({ name: '所有歌曲' });
     if (oldAllSongs) {
       await Playlist.updateOne(
@@ -138,9 +132,29 @@ async function migrateOldData() {
       console.log('✅ 已將「所有歌曲」重命名為「已上傳歌曲清單」');
     }
 
-    console.log('🎉 資料遷移完成！');
+    console.log('🎉 資料遷移完成!');
   } catch (err) {
     console.error('❌ 資料遷移失敗:', err);
+  }
+}
+
+// 從音訊檔案提取封面的函數
+async function extractAlbumCover(buffer) {
+  try {
+    const musicMetadata = await import('music-metadata');
+    const metadata = await musicMetadata.parseBuffer(buffer, { skipCovers: false });
+    
+    if (metadata.common.picture && metadata.common.picture.length > 0) {
+      const picture = metadata.common.picture[0];
+      return {
+        data: picture.data,
+        format: picture.format
+      };
+    }
+    return null;
+  } catch (err) {
+    console.log('無法提取封面:', err.message);
+    return null;
   }
 }
 
@@ -164,7 +178,8 @@ app.get('/api/playlists', async (req, res) => {
           id: s.id,
           name: s.name,
           url: s.url,
-          fileName: s.fileName
+          fileName: s.fileName,
+          coverUrl: s.coverUrl || null
         }));
       
       result.playlists[playlist.name] = songs;
@@ -176,7 +191,7 @@ app.get('/api/playlists', async (req, res) => {
   }
 });
 
-// 上傳音樂（自動加入「所有歌曲」）
+// 上傳音樂
 app.post('/api/upload', upload.single('audio'), async (req, res) => {
   try {
     const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
@@ -185,7 +200,30 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
 
     console.log(`開始上傳: ${originalName}`);
 
-    const parallelUploads3 = new Upload({
+    // 嘗試提取封面
+    let coverUrl = null;
+    const cover = await extractAlbumCover(req.file.buffer);
+    
+    if (cover) {
+      const coverFileName = `cover-${Date.now()}.${cover.format === 'image/jpeg' ? 'jpg' : 'png'}`;
+      console.log(`上傳封面: ${coverFileName}`);
+      
+      const coverUpload = new Upload({
+        client: s3Client,
+        params: {
+          Bucket: BUCKET_NAME,
+          Key: coverFileName,
+          Body: cover.data,
+          ContentType: cover.format,
+        },
+      });
+
+      await coverUpload.done();
+      coverUrl = `${process.env.R2_PUBLIC_URL}/${encodeURIComponent(coverFileName)}`;
+    }
+
+    // 上傳音訊檔案
+    const audioUpload = new Upload({
       client: s3Client,
       params: {
         Bucket: BUCKET_NAME,
@@ -195,7 +233,7 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
       },
     });
 
-    await parallelUploads3.done();
+    await audioUpload.done();
 
     const publicUrl = `${process.env.R2_PUBLIC_URL}/${encodeURIComponent(safeFileName)}`;
     const songId = Date.now().toString();
@@ -205,7 +243,8 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
       id: songId,
       name: originalName, 
       url: publicUrl, 
-      fileName: safeFileName 
+      fileName: safeFileName,
+      coverUrl: coverUrl
     });
 
     // 加入「已上傳歌曲清單」清單
@@ -221,7 +260,8 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
         id: newSong.id,
         name: newSong.name,
         url: newSong.url,
-        fileName: newSong.fileName
+        fileName: newSong.fileName,
+        coverUrl: newSong.coverUrl
       }
     });
   } catch (err) {
@@ -241,23 +281,31 @@ app.put('/api/music/rename', async (req, res) => {
   }
 });
 
-// 從「已上傳歌曲清單」刪除（真正刪除）
+// 從「已上傳歌曲清單」刪除(真正刪除)
 app.delete('/api/music', async (req, res) => {
   try {
     const { songId, playlistName } = req.body;
     
     if (playlistName === '已上傳歌曲清單') {
-      // 從已上傳歌曲清單刪除 = 徹底刪除
       const song = await Song.findOne({ id: songId });
       if (!song) {
         return res.status(404).json({ error: '歌曲不存在' });
       }
 
-      // 從 R2 刪除檔案
+      // 從 R2 刪除音訊檔案
       await s3Client.send(new DeleteObjectCommand({ 
         Bucket: BUCKET_NAME, 
         Key: song.fileName 
       }));
+
+      // 如果有封面,也刪除封面
+      if (song.coverUrl) {
+        const coverFileName = song.coverUrl.split('/').pop();
+        await s3Client.send(new DeleteObjectCommand({ 
+          Bucket: BUCKET_NAME, 
+          Key: decodeURIComponent(coverFileName)
+        }));
+      }
 
       // 從所有播放清單移除
       await Playlist.updateMany(
@@ -270,13 +318,13 @@ app.delete('/api/music', async (req, res) => {
 
       console.log(`實體檔案 ${song.fileName} 已從雲端及所有清單徹底刪除`);
     } else {
-      // 從其他清單移除（不刪除檔案）
+      // 從其他清單移除(不刪除檔案)
       await Playlist.findOneAndUpdate(
         { name: playlistName },
         { $pull: { songIds: songId } }
       );
       
-      console.log(`僅將歌曲從清單「${playlistName}」移除，保留 R2 檔案`);
+      console.log(`僅將歌曲從清單「${playlistName}」移除,保留 R2 檔案`);
     }
 
     res.json({ success: true });
@@ -343,7 +391,7 @@ app.put('/api/playlist/rename', async (req, res) => {
   }
 });
 
-// 刪除播放清單（不刪除歌曲檔案）
+// 刪除播放清單(不刪除歌曲檔案)
 app.delete('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
@@ -353,7 +401,7 @@ app.delete('/api/playlist', async (req, res) => {
     }
 
     await Playlist.deleteOne({ name });
-    console.log(`播放清單「${name}」已移除，保留原始音樂檔案`);
+    console.log(`播放清單「${name}」已移除,保留原始音樂檔案`);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
