@@ -69,9 +69,14 @@ const upload = multer({
 
 // --- 初始化函數 ---
 async function ensureAllSongsPlaylist() {
-  const existing = await Playlist.findOne({ name: '已上傳歌曲清單' });
-  if (!existing) {
-    await Playlist.create({ name: '已上傳歌曲清單', songIds: [] });
+  try {
+    const existing = await Playlist.findOne({ name: '已上傳歌曲清單' });
+    if (!existing) {
+      await Playlist.create({ name: '已上傳歌曲清單', songIds: [] });
+      console.log('✅ 已創建「已上傳歌曲清單」');
+    }
+  } catch (err) {
+    console.error('❌ 創建默認清單失敗:', err);
   }
 }
 
@@ -187,6 +192,7 @@ app.get('/api/playlists', async (req, res) => {
     
     res.json(result);
   } catch (err) { 
+    console.error('獲取播放清單失敗:', err);
     res.status(500).json({ error: err.message }); 
   }
 });
@@ -194,6 +200,10 @@ app.get('/api/playlists', async (req, res) => {
 // 上傳音樂
 app.post('/api/upload', upload.single('audio'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({ error: '沒有上傳檔案' });
+    }
+
     const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const cleanName = originalName.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_');
     const safeFileName = `${Date.now()}-${cleanName}`; 
@@ -202,24 +212,29 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
 
     // 嘗試提取封面
     let coverUrl = null;
-    const cover = await extractAlbumCover(req.file.buffer);
-    
-    if (cover) {
-      const coverFileName = `cover-${Date.now()}.${cover.format === 'image/jpeg' ? 'jpg' : 'png'}`;
-      console.log(`上傳封面: ${coverFileName}`);
+    try {
+      const cover = await extractAlbumCover(req.file.buffer);
       
-      const coverUpload = new Upload({
-        client: s3Client,
-        params: {
-          Bucket: BUCKET_NAME,
-          Key: coverFileName,
-          Body: cover.data,
-          ContentType: cover.format,
-        },
-      });
+      if (cover) {
+        const coverFileName = `cover-${Date.now()}.${cover.format === 'image/jpeg' ? 'jpg' : 'png'}`;
+        console.log(`上傳封面: ${coverFileName}`);
+        
+        const coverUpload = new Upload({
+          client: s3Client,
+          params: {
+            Bucket: BUCKET_NAME,
+            Key: coverFileName,
+            Body: cover.data,
+            ContentType: cover.format,
+          },
+        });
 
-      await coverUpload.done();
-      coverUrl = `${process.env.R2_PUBLIC_URL}/${encodeURIComponent(coverFileName)}`;
+        await coverUpload.done();
+        coverUrl = `${process.env.R2_PUBLIC_URL}/${encodeURIComponent(coverFileName)}`;
+        console.log(`封面上傳成功: ${coverUrl}`);
+      }
+    } catch (coverErr) {
+      console.log('封面處理失敗(繼續上傳音訊):', coverErr.message);
     }
 
     // 上傳音訊檔案
@@ -254,6 +269,8 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
       { upsert: true }
     );
 
+    console.log(`✅ 上傳成功: ${originalName}`);
+
     res.json({ 
       success: true, 
       song: {
@@ -266,7 +283,9 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
     });
   } catch (err) {
     console.error('上傳失敗:', err);
-    if (!res.headersSent) res.status(500).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
@@ -293,18 +312,28 @@ app.delete('/api/music', async (req, res) => {
       }
 
       // 從 R2 刪除音訊檔案
-      await s3Client.send(new DeleteObjectCommand({ 
-        Bucket: BUCKET_NAME, 
-        Key: song.fileName 
-      }));
+      try {
+        await s3Client.send(new DeleteObjectCommand({ 
+          Bucket: BUCKET_NAME, 
+          Key: song.fileName 
+        }));
+        console.log(`已刪除音訊檔案: ${song.fileName}`);
+      } catch (err) {
+        console.error('刪除音訊檔案失敗:', err);
+      }
 
       // 如果有封面,也刪除封面
       if (song.coverUrl) {
-        const coverFileName = song.coverUrl.split('/').pop();
-        await s3Client.send(new DeleteObjectCommand({ 
-          Bucket: BUCKET_NAME, 
-          Key: decodeURIComponent(coverFileName)
-        }));
+        try {
+          const coverFileName = song.coverUrl.split('/').pop();
+          await s3Client.send(new DeleteObjectCommand({ 
+            Bucket: BUCKET_NAME, 
+            Key: decodeURIComponent(coverFileName)
+          }));
+          console.log(`已刪除封面: ${coverFileName}`);
+        } catch (err) {
+          console.error('刪除封面失敗:', err);
+        }
       }
 
       // 從所有播放清單移除
@@ -316,7 +345,7 @@ app.delete('/api/music', async (req, res) => {
       // 從主資料庫刪除
       await Song.deleteOne({ id: songId });
 
-      console.log(`實體檔案 ${song.fileName} 已從雲端及所有清單徹底刪除`);
+      console.log(`✅ 歌曲 ${song.name} 已徹底刪除`);
     } else {
       // 從其他清單移除(不刪除檔案)
       await Playlist.findOneAndUpdate(
@@ -324,11 +353,12 @@ app.delete('/api/music', async (req, res) => {
         { $pull: { songIds: songId } }
       );
       
-      console.log(`僅將歌曲從清單「${playlistName}」移除,保留 R2 檔案`);
+      console.log(`✅ 僅將歌曲從清單「${playlistName}」移除`);
     }
 
     res.json({ success: true });
   } catch (err) {
+    console.error('刪除失敗:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -338,14 +368,20 @@ app.post('/api/playlist/add-songs', async (req, res) => {
   try {
     const { playlistName, songIds } = req.body;
     
+    if (!playlistName || !songIds || !Array.isArray(songIds)) {
+      return res.status(400).json({ error: '參數錯誤' });
+    }
+    
     await Playlist.findOneAndUpdate(
       { name: playlistName },
       { $addToSet: { songIds: { $each: songIds } } },
       { upsert: true }
     );
 
+    console.log(`✅ 已添加 ${songIds.length} 首歌曲到「${playlistName}」`);
     res.json({ success: true });
   } catch (err) {
+    console.error('添加歌曲失敗:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -355,14 +391,24 @@ app.post('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
     
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: '清單名稱不能為空' });
+    }
+    
     if (name === '已上傳歌曲清單') {
       return res.status(400).json({ error: '此名稱為保留名稱' });
     }
 
-    await Playlist.create({ name, songIds: [] });
+    await Playlist.create({ name: name.trim(), songIds: [] });
+    console.log(`✅ 創建播放清單: ${name}`);
     res.json({ success: true });
   } catch (err) { 
-    res.status(400).json({ error: '名稱重複或無效' }); 
+    console.error('創建播放清單失敗:', err);
+    if (err.code === 11000) {
+      res.status(400).json({ error: '名稱重複' });
+    } else {
+      res.status(400).json({ error: '創建失敗' }); 
+    }
   }
 });
 
@@ -370,6 +416,10 @@ app.post('/api/playlist', async (req, res) => {
 app.put('/api/playlist/rename', async (req, res) => {
   try {
     const { oldName, newName } = req.body;
+    
+    if (!oldName || !newName) {
+      return res.status(400).json({ error: '參數錯誤' });
+    }
     
     if (oldName === '已上傳歌曲清單') {
       return res.status(400).json({ error: '無法重命名「已上傳歌曲清單」' });
@@ -384,9 +434,16 @@ app.put('/api/playlist/rename', async (req, res) => {
       return res.status(400).json({ error: '名稱已存在' });
     }
 
-    await Playlist.updateOne({ name: oldName }, { $set: { name: newName } });
+    const result = await Playlist.updateOne({ name: oldName }, { $set: { name: newName } });
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: '播放清單不存在' });
+    }
+
+    console.log(`✅ 重命名播放清單: ${oldName} → ${newName}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('重命名播放清單失敗:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -396,16 +453,26 @@ app.delete('/api/playlist', async (req, res) => {
   try {
     const { name } = req.body;
     
+    if (!name) {
+      return res.status(400).json({ error: '參數錯誤' });
+    }
+    
     if (name === '已上傳歌曲清單') {
       return res.status(400).json({ error: '無法刪除「已上傳歌曲清單」' });
     }
 
-    await Playlist.deleteOne({ name });
-    console.log(`播放清單「${name}」已移除,保留原始音樂檔案`);
+    const result = await Playlist.deleteOne({ name });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: '播放清單不存在' });
+    }
+
+    console.log(`✅ 刪除播放清單: ${name}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('刪除播放清單失敗:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server is running on port ${PORT}`));
