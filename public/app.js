@@ -21,6 +21,7 @@ const durationEl = document.getElementById('duration');
 const songList = document.getElementById('songList');
 const playlistSelector = document.getElementById('playlistSelector');
 const uploadBtn = document.getElementById('uploadBtn');
+const addToListBtn = document.getElementById('addToListBtn');
 const fileInput = document.getElementById('fileInput');
 const newPlaylistBtn = document.getElementById('newPlaylistBtn');
 const renamePlaylistBtn = document.getElementById('renamePlaylistBtn');
@@ -65,6 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     progressBar.addEventListener('input', seek);
     playlistSelector.addEventListener('change', handlePlaylistChange);
     uploadBtn.addEventListener('click', () => fileInput.click());
+    addToListBtn.addEventListener('click', enterBatchMode);
     fileInput.addEventListener('change', (e) => handleUpload(e.target.files));
     newPlaylistBtn.addEventListener('click', createNewPlaylist);
     renamePlaylistBtn.addEventListener('click', renamePlaylist);
@@ -142,7 +144,8 @@ function updatePlaylistButtons() {
     const isMainList = currentPlaylist === '已上傳歌曲清單';
     renamePlaylistBtn.style.display = isMainList ? 'none' : 'inline-flex';
     deletePlaylistBtn.style.display = isMainList ? 'none' : 'inline-flex';
-    uploadBtn.style.display = 'inline-flex';
+    uploadBtn.style.display = isMainList ? 'inline-flex' : 'none';
+    addToListBtn.style.display = isMainList ? 'inline-flex' : 'none';
 }
 
 async function handlePlaylistChange(e) {
@@ -250,6 +253,7 @@ function exitBatchMode() {
     selectedSongs.clear();
     batchActionBar.style.display = 'none';
     playlistDropdown.style.display = 'none';
+    selectedCount.textContent = '已選擇 0 首';
     updatePlaylistButtons();
     renderSongList();
 }
@@ -305,7 +309,7 @@ async function addToSelectedPlaylist(playlistName) {
 let pressTimer;
 songList.addEventListener('touchstart', (e) => {
     const songItem = e.target.closest('.song-item');
-    if (songItem && currentPlaylist !== '已上傳歌曲清單' && !batchMode) {
+    if (songItem && !batchMode) {
         pressTimer = setTimeout(() => {
             const songId = songItem.dataset.songId;
             enterBatchMode();
@@ -320,7 +324,7 @@ songList.addEventListener('touchend', () => {
 
 songList.addEventListener('contextmenu', (e) => {
     const songItem = e.target.closest('.song-item');
-    if (songItem && currentPlaylist !== '已上傳歌曲清單' && !batchMode) {
+    if (songItem && !batchMode) {
         e.preventDefault();
         const songId = songItem.dataset.songId;
         enterBatchMode();
