@@ -80,6 +80,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     audio.addEventListener('timeupdate', updateProgress);
     audio.addEventListener('loadedmetadata', updateDuration);
     audio.addEventListener('ended', handleSongEnded);
+    
+    // 確保音訊元素在後台繼續播放
+    audio.addEventListener('pause', () => {
+        if (isPlaying && !audio.ended) {
+            // 如果應該播放但被暫停了，嘗試恢復
+            setTimeout(() => {
+                if (isPlaying) {
+                    audio.play().catch(err => console.error('自動恢復播放失敗:', err));
+                }
+            }, 100);
+        }
+    });
+    
+    // 處理音訊加載錯誤
+    audio.addEventListener('error', (e) => {
+        console.error('音訊加載錯誤:', e);
+        showToast('音訊加載失敗');
+        isPlaying = false;
+        updatePlayButton();
+    });
 
     // 點擊外部關閉下拉選單
     document.addEventListener('click', (e) => {
@@ -89,10 +109,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     if ('mediaSession' in navigator) {
-        navigator.mediaSession.setActionHandler('play', togglePlay);
-        navigator.mediaSession.setActionHandler('pause', togglePlay);
+        navigator.mediaSession.setActionHandler('play', () => {
+            if (audio.src) {
+                audio.play().catch(err => console.error('Media Session 播放失敗:', err));
+                isPlaying = true;
+                updatePlayButton();
+            }
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+            audio.pause();
+            isPlaying = false;
+            updatePlayButton();
+        });
         navigator.mediaSession.setActionHandler('previoustrack', playPrevious);
         navigator.mediaSession.setActionHandler('nexttrack', playNext);
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+            audio.currentTime = Math.max(audio.currentTime - (details.seekOffset || 10), 0);
+        });
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+            audio.currentTime = Math.min(audio.currentTime + (details.seekOffset || 10), audio.duration);
+        });
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+            if (details.seekTime) {
+                audio.currentTime = details.seekTime;
+            }
+        });
     }
 });
 
@@ -336,23 +377,50 @@ function playSong(index) {
     if (currentSongs.length === 0) return;
     currentIndex = index;
     const song = currentSongs[currentIndex];
+    
+    // 先設置音源
     audio.src = song.url;
-    audio.play().catch(err => {
-        showToast('播放失敗');
-        console.error(err);
-    });
-    isPlaying = true;
-    nowPlaying.textContent = song.name;
-    updatePlayButton();
-    updateAlbumArt(song);
-    renderSongList();
+    
+    // 嘗試播放
+    const playPromise = audio.play();
+    
+    if (playPromise !== undefined) {
+        playPromise
+            .then(() => {
+                // 播放成功
+                isPlaying = true;
+                nowPlaying.textContent = song.name;
+                updatePlayButton();
+                updateAlbumArt(song);
+                renderSongList();
+                updateMediaSession(song);
+            })
+            .catch(err => {
+                console.error('播放失敗:', err);
+                showToast('播放失敗，請點擊播放按鈕');
+                isPlaying = false;
+                updatePlayButton();
+            });
+    }
+}
 
+function updateMediaSession(song) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: song.name,
             artist: '音巢',
             album: currentPlaylist,
-            artwork: song.coverUrl ? [{ src: song.coverUrl, sizes: '512x512', type: 'image/jpeg' }] : [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
+            artwork: song.coverUrl ? [
+                { src: song.coverUrl, sizes: '96x96', type: 'image/jpeg' },
+                { src: song.coverUrl, sizes: '128x128', type: 'image/jpeg' },
+                { src: song.coverUrl, sizes: '192x192', type: 'image/jpeg' },
+                { src: song.coverUrl, sizes: '256x256', type: 'image/jpeg' },
+                { src: song.coverUrl, sizes: '384x384', type: 'image/jpeg' },
+                { src: song.coverUrl, sizes: '512x512', type: 'image/jpeg' }
+            ] : [
+                { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+            ]
         });
     }
 }
@@ -383,13 +451,18 @@ function togglePlay() {
     
     if (isPlaying) {
         audio.pause();
+        isPlaying = false;
     } else {
-        audio.play().catch(err => {
-            showToast('播放失敗');
-            console.error(err);
-        });
+        audio.play()
+            .then(() => {
+                isPlaying = true;
+            })
+            .catch(err => {
+                console.error('播放失敗:', err);
+                showToast('播放失敗');
+                isPlaying = false;
+            });
     }
-    isPlaying = !isPlaying;
     updatePlayButton();
 }
 
@@ -402,21 +475,21 @@ function updatePlayButton() {
 
 function handleSongEnded() {
     if (repeatMode === 1) {
+        // 單曲循環
         audio.currentTime = 0;
-        audio.play();
+        audio.play().catch(err => console.error('播放失敗:', err));
     } else if (repeatMode === 2) {
+        // 列表循環
         playNext();
     } else if (isShuffle) {
-        if (currentIndex < currentSongs.length - 1 || currentSongs.length > 1) {
-            playNext();
-        } else {
-            isPlaying = false;
-            updatePlayButton();
-        }
+        // 隨機播放
+        playNext();
     } else {
+        // 順序播放
         if (currentIndex < currentSongs.length - 1) {
             playNext();
         } else {
+            // 播放完畢
             isPlaying = false;
             updatePlayButton();
         }
