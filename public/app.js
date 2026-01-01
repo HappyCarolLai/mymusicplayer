@@ -7,6 +7,8 @@ let isShuffle = false;
 let repeatMode = 0;
 let selectedSongs = new Set();
 let batchMode = false;
+let shuffleHistory = []; // 記錄已播放的歌曲索引
+let availableIndices = []; // 可用的歌曲索引池
 
 const audio = document.getElementById('audioPlayer');
 const playBtn = document.getElementById('playBtn');
@@ -161,6 +163,7 @@ async function loadPlaylists() {
         
         currentPlaylist = selected;
         currentSongs = allPlaylists[currentPlaylist] || [];
+        resetShuffleState(); // 初始化時重置隨機狀態
         renderSongList();
         updatePlaylistButtons();
         updatePlaylistIcon();
@@ -192,10 +195,17 @@ function updatePlaylistButtons() {
 async function handlePlaylistChange(e) {
     currentPlaylist = e.target.value;
     currentSongs = allPlaylists[currentPlaylist] || [];
+    resetShuffleState(); // 切換清單時重置隨機播放狀態
     renderSongList();
     updatePlaylistButtons();
     updatePlaylistIcon();
     exitBatchMode();
+}
+
+// 重置隨機播放狀態
+function resetShuffleState() {
+    shuffleHistory = [];
+    availableIndices = currentSongs.map((_, i) => i);
 }
 
 function renderSongList() {
@@ -263,6 +273,13 @@ function handleSongClick(songId, index) {
     if (batchMode) {
         toggleSongSelect(songId);
     } else {
+        // 手動選擇歌曲時，如果是隨機模式，更新隨機狀態
+        if (isShuffle) {
+            // 將選擇的歌曲加入歷史
+            shuffleHistory.push(index);
+            // 從可用池中移除
+            availableIndices = availableIndices.filter(i => i !== index);
+        }
         playSong(index);
     }
 }
@@ -445,7 +462,13 @@ function togglePlay() {
     }
     
     if (!audio.src) {
-        playSong(0);
+        // 如果是隨機模式，從隨機位置開始
+        if (isShuffle) {
+            const randomIndex = getNextShuffleIndex();
+            playSong(randomIndex);
+        } else {
+            playSong(0);
+        }
         return;
     }
     
@@ -500,28 +523,95 @@ function playNext() {
     if (currentSongs.length === 0) return;
     
     if (isShuffle) {
-        currentIndex = Math.floor(Math.random() * currentSongs.length);
+        const nextIndex = getNextShuffleIndex();
+        playSong(nextIndex);
     } else {
         currentIndex = (currentIndex + 1) % currentSongs.length;
+        playSong(currentIndex);
+    }
+}
+
+// 獲取下一個隨機索引（不重複，直到所有歌曲播完）
+function getNextShuffleIndex() {
+    // 如果可用池為空，重新填充（但排除當前正在播放的歌曲）
+    if (availableIndices.length === 0) {
+        availableIndices = currentSongs.map((_, i) => i);
+        shuffleHistory = [];
+        
+        // 如果有超過一首歌，排除當前歌曲避免連續播放同一首
+        if (currentSongs.length > 1 && availableIndices.includes(currentIndex)) {
+            availableIndices = availableIndices.filter(i => i !== currentIndex);
+        }
+        
+        console.log('🔄 隨機播放已完成一輪，重新開始');
+        showToast('已播完所有歌曲，重新隨機播放', 2000);
     }
     
-    playSong(currentIndex);
+    // 從可用池中隨機選擇一個索引
+    const randomPos = Math.floor(Math.random() * availableIndices.length);
+    const selectedIndex = availableIndices[randomPos];
+    
+    // 從可用池中移除已選擇的索引
+    availableIndices.splice(randomPos, 1);
+    
+    // 添加到歷史記錄
+    shuffleHistory.push(selectedIndex);
+    
+    console.log(`🎲 隨機選擇: ${selectedIndex + 1}/${currentSongs.length}, 剩餘: ${availableIndices.length}`);
+    
+    return selectedIndex;
 }
 
 function playPrevious() {
     if (currentSongs.length === 0) return;
-    currentIndex = (currentIndex - 1 + currentSongs.length) % currentSongs.length;
-    playSong(currentIndex);
+    
+    if (isShuffle) {
+        // 在隨機模式下，回到上一首播放過的歌
+        if (shuffleHistory.length > 1) {
+            // 移除當前歌曲
+            shuffleHistory.pop();
+            // 獲取上一首歌
+            const previousIndex = shuffleHistory[shuffleHistory.length - 1];
+            // 將當前歌曲加回可用池
+            if (!availableIndices.includes(currentIndex)) {
+                availableIndices.push(currentIndex);
+            }
+            currentIndex = previousIndex;
+            playSong(currentIndex);
+        } else {
+            // 如果沒有歷史記錄，就播放一首隨機的
+            const nextIndex = getNextShuffleIndex();
+            playSong(nextIndex);
+        }
+    } else {
+        currentIndex = (currentIndex - 1 + currentSongs.length) % currentSongs.length;
+        playSong(currentIndex);
+    }
 }
 
 function toggleShuffle() {
     isShuffle = !isShuffle;
     shuffleBtn.classList.toggle('active', isShuffle);
-    if (isShuffle && repeatMode === 1) {
-        repeatMode = 0;
-        updateRepeatButton();
+    
+    if (isShuffle) {
+        // 開啟隨機播放時，重置狀態
+        resetShuffleState();
+        // 將當前歌曲標記為已播放
+        if (currentSongs.length > 0 && audio.src) {
+            shuffleHistory = [currentIndex];
+            availableIndices = availableIndices.filter(i => i !== currentIndex);
+        }
+        showToast('隨機播放已開啟 - 不重複播放直到全部播完');
+        
+        // 如果開啟隨機時有單曲循環，關閉單曲循環
+        if (repeatMode === 1) {
+            repeatMode = 0;
+            updateRepeatButton();
+        }
+    } else {
+        showToast('順序播放');
+        resetShuffleState();
     }
-    showToast(isShuffle ? '隨機播放已開啟' : '順序播放');
 }
 
 function toggleRepeat() {
@@ -594,6 +684,9 @@ async function handleUpload(files) {
     } else {
         showToast(`成功 ${successCount} 首,失敗 ${failCount} 首`);
     }
+    
+    // 上傳後重置隨機狀態
+    resetShuffleState();
 }
 
 async function deleteSong(songId) {
@@ -620,6 +713,9 @@ async function deleteSong(songId) {
         if (currentSongs.length > 0 && currentIndex >= currentSongs.length) {
             currentIndex = 0;
         }
+        
+        // 刪除歌曲後重置隨機狀態
+        resetShuffleState();
     } catch (error) {
         showToast('刪除失敗');
         console.error(error);
