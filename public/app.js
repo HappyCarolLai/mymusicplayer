@@ -7,8 +7,8 @@ let isShuffle = false;
 let repeatMode = 0;
 let selectedSongs = new Set();
 let batchMode = false;
-let shuffleHistory = []; // 記錄已播放的歌曲索引
-let availableIndices = []; // 可用的歌曲索引池
+let shuffleHistory = [];
+let availableIndices = [];
 
 const audio = document.getElementById('audioPlayer');
 const playBtn = document.getElementById('playBtn');
@@ -35,6 +35,34 @@ const cancelBatchBtn = document.getElementById('cancelBatchBtn');
 const playlistDropdown = document.getElementById('playlistDropdown');
 const playlistOptions = document.getElementById('playlistOptions');
 const albumArt = document.getElementById('albumArt');
+
+// Web Audio API 設定（iOS 相容的音量控制）
+let audioContext = null;
+let gainNode = null;
+let sourceNode = null;
+let isAudioContextInitialized = false;
+
+// 設定統一音量為 35%
+const STANDARD_VOLUME = 0.35;
+
+// 初始化 Web Audio API
+function initializeAudioContext() {
+    if (isAudioContextInitialized) return;
+    
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        sourceNode = audioContext.createMediaElementSource(audio);
+        gainNode = audioContext.createGain();
+        sourceNode.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        gainNode.gain.value = STANDARD_VOLUME;
+        isAudioContextInitialized = true;
+        console.log('✅ Web Audio API 初始化成功，音量設為', STANDARD_VOLUME);
+    } catch (error) {
+        console.error('❌ Web Audio API 初始化失敗:', error);
+        audio.volume = STANDARD_VOLUME;
+    }
+}
 
 function showToast(message, duration = 3000) {
     const existingToast = document.querySelector('.upload-toast');
@@ -83,10 +111,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     audio.addEventListener('loadedmetadata', updateDuration);
     audio.addEventListener('ended', handleSongEnded);
     
-    // 確保音訊元素在後台繼續播放
     audio.addEventListener('pause', () => {
         if (isPlaying && !audio.ended) {
-            // 如果應該播放但被暫停了，嘗試恢復
             setTimeout(() => {
                 if (isPlaying) {
                     audio.play().catch(err => console.error('自動恢復播放失敗:', err));
@@ -95,15 +121,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // 處理音訊加載錯誤
     audio.addEventListener('error', (e) => {
-        console.error('音訊加載錯誤:', e);
-        showToast('音訊加載失敗');
+        console.error('音訊載入錯誤:', e);
+        showToast('音訊載入失敗');
         isPlaying = false;
         updatePlayButton();
     });
+    
+    audio.addEventListener('loadeddata', () => {
+        if (gainNode) {
+            gainNode.gain.value = STANDARD_VOLUME;
+        }
+    });
+    
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+    });
 
-    // 點擊外部關閉下拉選單
     document.addEventListener('click', (e) => {
         if (!playlistDropdown.contains(e.target) && !addToPlaylistBtn.contains(e.target)) {
             playlistDropdown.style.display = 'none';
@@ -113,6 +149,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.setActionHandler('play', () => {
             if (audio.src) {
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
                 audio.play().catch(err => console.error('Media Session 播放失敗:', err));
                 isPlaying = true;
                 updatePlayButton();
@@ -163,7 +202,7 @@ async function loadPlaylists() {
         
         currentPlaylist = selected;
         currentSongs = allPlaylists[currentPlaylist] || [];
-        resetShuffleState(); // 初始化時重置隨機狀態
+        resetShuffleState();
         renderSongList();
         updatePlaylistButtons();
         updatePlaylistIcon();
@@ -195,14 +234,13 @@ function updatePlaylistButtons() {
 async function handlePlaylistChange(e) {
     currentPlaylist = e.target.value;
     currentSongs = allPlaylists[currentPlaylist] || [];
-    resetShuffleState(); // 切換清單時重置隨機播放狀態
+    resetShuffleState();
     renderSongList();
     updatePlaylistButtons();
     updatePlaylistIcon();
     exitBatchMode();
 }
 
-// 重置隨機播放狀態
 function resetShuffleState() {
     shuffleHistory = [];
     availableIndices = currentSongs.map((_, i) => i);
@@ -273,11 +311,8 @@ function handleSongClick(songId, index) {
     if (batchMode) {
         toggleSongSelect(songId);
     } else {
-        // 手動選擇歌曲時，如果是隨機模式，更新隨機狀態
         if (isShuffle) {
-            // 將選擇的歌曲加入歷史
             shuffleHistory.push(index);
-            // 從可用池中移除
             availableIndices = availableIndices.filter(i => i !== index);
         }
         playSong(index);
@@ -363,7 +398,6 @@ async function addToSelectedPlaylist(playlistName) {
     }
 }
 
-// 長按進入批量模式
 let pressTimer;
 songList.addEventListener('touchstart', (e) => {
     const songItem = e.target.closest('.song-item');
@@ -393,28 +427,35 @@ songList.addEventListener('contextmenu', (e) => {
 function playSong(index) {
     if (currentSongs.length === 0) return;
     
-    // 更新當前索引
     currentIndex = index;
     const song = currentSongs[currentIndex];
     
     console.log(`▶️ 播放: ${song.name} (${currentIndex + 1}/${currentSongs.length})`);
     
-    // 先設置音源
     audio.src = song.url;
     
-    // 立即更新 UI
     nowPlaying.textContent = song.name;
     updateAlbumArt(song);
     renderSongList();
     updateMediaSession(song);
     
-    // 嘗試播放
     const playPromise = audio.play();
     
     if (playPromise !== undefined) {
         playPromise
             .then(() => {
-                // 播放成功
+                if (!isAudioContextInitialized) {
+                    initializeAudioContext();
+                }
+                
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                
+                if (gainNode) {
+                    gainNode.gain.value = STANDARD_VOLUME;
+                }
+                
                 isPlaying = true;
                 updatePlayButton();
                 console.log('✅ 播放成功');
@@ -426,7 +467,6 @@ function playSong(index) {
                 updatePlayButton();
             });
     } else {
-        // 如果沒有返回 Promise，假設播放成功
         isPlaying = true;
         updatePlayButton();
     }
@@ -473,7 +513,6 @@ function togglePlay() {
     }
     
     if (!audio.src) {
-        // 如果是隨機模式，從隨機位置開始
         if (isShuffle) {
             const randomIndex = getNextShuffleIndex();
             playSong(randomIndex);
@@ -487,6 +526,14 @@ function togglePlay() {
         audio.pause();
         isPlaying = false;
     } else {
+        if (!isAudioContextInitialized) {
+            initializeAudioContext();
+        }
+        
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
         audio.play()
             .then(() => {
                 isPlaying = true;
@@ -511,14 +558,12 @@ function handleSongEnded() {
     console.log('🎵 歌曲播放結束');
     
     if (repeatMode === 1) {
-        // 單曲循環
         console.log('🔁 單曲循環');
         audio.currentTime = 0;
         audio.play().catch(err => console.error('播放失敗:', err));
         return;
     }
     
-    // 檢查是否還有下一首
     const hasNext = isShuffle ? 
         (availableIndices.length > 0 || currentSongs.length > 1) : 
         (currentIndex < currentSongs.length - 1 || repeatMode === 2);
@@ -527,7 +572,6 @@ function handleSongEnded() {
         console.log('⏭️ 播放下一首');
         playNext();
     } else {
-        // 播放完畢
         console.log('⏹️ 播放完畢');
         isPlaying = false;
         updatePlayButton();
@@ -550,15 +594,12 @@ function playNext() {
     playSong(nextIndex);
 }
 
-// 獲取下一個隨機索引(不重複，直到所有歌曲播完)
 function getNextShuffleIndex() {
-    // 如果可用池為空，重新填充(但排除當前正在播放的歌曲)
     if (availableIndices.length === 0) {
         console.log('🔄 隨機池已空，重新填充');
         availableIndices = currentSongs.map((_, i) => i);
         shuffleHistory = [];
         
-        // 如果有超過一首歌，排除當前歌曲避免連續播放同一首
         if (currentSongs.length > 1) {
             availableIndices = availableIndices.filter(i => i !== currentIndex);
             console.log(`   排除當前歌曲 ${currentIndex}，剩餘 ${availableIndices.length} 首`);
@@ -567,14 +608,10 @@ function getNextShuffleIndex() {
         showToast('已播完所有歌曲，重新隨機播放', 2000);
     }
     
-    // 從可用池中隨機選擇一個索引
     const randomPos = Math.floor(Math.random() * availableIndices.length);
     const selectedIndex = availableIndices[randomPos];
     
-    // 從可用池中移除已選擇的索引
     availableIndices.splice(randomPos, 1);
-    
-    // 添加到歷史記錄
     shuffleHistory.push(selectedIndex);
     
     console.log(`🎲 隨機選擇: ${selectedIndex + 1}/${currentSongs.length}, 剩餘未播: ${availableIndices.length}`);
@@ -588,19 +625,14 @@ function playPrevious() {
     let prevIndex;
     
     if (isShuffle) {
-        // 在隨機模式下，回到上一首播放過的歌
         if (shuffleHistory.length > 1) {
-            // 移除當前歌曲
             shuffleHistory.pop();
-            // 獲取上一首歌
             prevIndex = shuffleHistory[shuffleHistory.length - 1];
-            // 將當前歌曲加回可用池
             if (!availableIndices.includes(currentIndex)) {
                 availableIndices.push(currentIndex);
             }
             console.log(`⏮️ 隨機模式上一首: ${prevIndex}`);
         } else {
-            // 如果沒有歷史記錄，就播放一首隨機的
             prevIndex = getNextShuffleIndex();
             console.log(`⏮️ 無歷史，隨機選擇: ${prevIndex}`);
         }
@@ -617,16 +649,13 @@ function toggleShuffle() {
     shuffleBtn.classList.toggle('active', isShuffle);
     
     if (isShuffle) {
-        // 開啟隨機播放時，重置狀態
         resetShuffleState();
-        // 將當前歌曲標記為已播放
         if (currentSongs.length > 0 && audio.src) {
             shuffleHistory = [currentIndex];
             availableIndices = availableIndices.filter(i => i !== currentIndex);
         }
         showToast('隨機播放已開啟 - 不重複播放直到全部播完');
         
-        // 如果開啟隨機時有單曲循環，關閉單曲循環
         if (repeatMode === 1) {
             repeatMode = 0;
             updateRepeatButton();
@@ -708,7 +737,6 @@ async function handleUpload(files) {
         showToast(`成功 ${successCount} 首,失敗 ${failCount} 首`);
     }
     
-    // 上傳後重置隨機狀態
     resetShuffleState();
 }
 
@@ -737,7 +765,6 @@ async function deleteSong(songId) {
             currentIndex = 0;
         }
         
-        // 刪除歌曲後重置隨機狀態
         resetShuffleState();
     } catch (error) {
         showToast('刪除失敗');
