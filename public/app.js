@@ -444,10 +444,6 @@ function playSong(index) {
     if (playPromise !== undefined) {
         playPromise
             .then(() => {
-                if (!isAudioContextInitialized) {
-                    initializeAudioContext();
-                }
-                
                 if (audioContext && audioContext.state === 'suspended') {
                     audioContext.resume();
                 }
@@ -507,43 +503,31 @@ function updateAlbumArt(song) {
 }
 
 function togglePlay() {
-    if (currentSongs.length === 0) {
-        showToast('請先上傳音樂');
-        return;
+    if (currentSongs.length === 0) return;
+
+    // ✅ 一定要在「使用者點擊」時初始化
+    if (!isAudioContextInitialized) {
+        initializeAudioContext();
     }
-    
+
+    if (audioContext && audioContext.state === 'suspended') {
+        audioContext.resume();
+    }
+
     if (!audio.src) {
-        if (isShuffle) {
-            const randomIndex = getNextShuffleIndex();
-            playSong(randomIndex);
-        } else {
-            playSong(0);
-        }
+        playSong(0);
         return;
     }
-    
+
     if (isPlaying) {
         audio.pause();
         isPlaying = false;
     } else {
-        if (!isAudioContextInitialized) {
-            initializeAudioContext();
-        }
-        
-        if (audioContext && audioContext.state === 'suspended') {
-            audioContext.resume();
-        }
-        
         audio.play()
-            .then(() => {
-                isPlaying = true;
-            })
-            .catch(err => {
-                console.error('播放失敗:', err);
-                showToast('播放失敗');
-                isPlaying = false;
-            });
+            .then(() => isPlaying = true)
+            .catch(console.error);
     }
+
     updatePlayButton();
 }
 
