@@ -444,6 +444,11 @@ function playSong(index) {
     if (playPromise !== undefined) {
         playPromise
             .then(() => {
+                // 首次播放時初始化 Web Audio API
+                if (!isAudioContextInitialized) {
+                    initializeAudioContext();
+                }
+                
                 if (audioContext && audioContext.state === 'suspended') {
                     audioContext.resume();
                 }
@@ -503,31 +508,45 @@ function updateAlbumArt(song) {
 }
 
 function togglePlay() {
-    if (currentSongs.length === 0) return;
-
-    // ✅ 一定要在「使用者點擊」時初始化
-    if (!isAudioContextInitialized) {
-        initializeAudioContext();
-    }
-
-    if (audioContext && audioContext.state === 'suspended') {
-        audioContext.resume();
-    }
-
-    if (!audio.src) {
-        playSong(0);
+    if (currentSongs.length === 0) {
+        showToast('請先上傳音樂');
         return;
     }
-
+    
+    if (!audio.src) {
+        // 修正：如果是隨機模式，從隨機位置開始
+        if (isShuffle) {
+            const randomIndex = getNextShuffleIndex();
+            playSong(randomIndex);
+        } else {
+            playSong(0);
+        }
+        return;
+    }
+    
     if (isPlaying) {
         audio.pause();
         isPlaying = false;
     } else {
+        // 在播放時初始化 Audio Context（需要用戶互動）
+        if (!isAudioContextInitialized) {
+            initializeAudioContext();
+        }
+        
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
         audio.play()
-            .then(() => isPlaying = true)
-            .catch(console.error);
+            .then(() => {
+                isPlaying = true;
+            })
+            .catch(err => {
+                console.error('播放失敗:', err);
+                showToast('播放失敗');
+                isPlaying = false;
+            });
     }
-
     updatePlayButton();
 }
 
@@ -753,7 +772,7 @@ async function deleteSong(songId) {
     } catch (error) {
         showToast('刪除失敗');
         console.error(error);
-    }
+        }
 }
 
 async function createNewPlaylist() {
