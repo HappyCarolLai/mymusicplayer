@@ -1,10 +1,3 @@
-// ===== Web Audio（車用模式）=====
-let audioCtx = null;
-let sourceNode = null;
-let compressor = null;
-let gainNode = null;
-let carModeEnabled = false;
-
 let currentPlaylist = '已上傳歌曲清單';
 let allPlaylists = {};
 let currentSongs = [];
@@ -59,31 +52,11 @@ function showToast(message, duration = 3000) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // ===== Service Worker =====
     if ('serviceWorker' in navigator) {
-        // 只在 localhost 取消註冊，避免上線影響
-        if (location.hostname === 'localhost') {
-            navigator.serviceWorker.getRegistrations().then(regs => {
-                regs.forEach(reg => reg.unregister());
-            });
-        }
+        navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(reg => reg.unregister());
+        });
     }
-
-    // ===== 車用模式 toggle 綁定 =====
-const carToggle = document.getElementById('carModeToggle');
-
-// 讀取之前存的狀態（不要用 let，直接覆蓋外層變數）
-carModeEnabled = localStorage.getItem('carMode') === '1';
-
-if (carToggle) {
-    carToggle.checked = carModeEnabled;
-
-    carToggle.addEventListener('change', e => {
-        carModeEnabled = e.target.checked;
-        localStorage.setItem('carMode', carModeEnabled ? '1' : '0');
-        applyAudioMode(); // 呼叫你現有的函數切換模式
-    });
-}
 
     await loadPlaylists();
     
@@ -250,20 +223,6 @@ function renderSongList() {
         return;
     }
 
-    if (batchMode) {
-        // 批量模式下只更新 checkbox 狀態，不整個重繪
-        currentSongs.forEach((song) => {
-            const checkbox = document.querySelector(`.song-item[data-song-id="${song.id}"] .song-checkbox`);
-            if (checkbox) {
-                const isSelected = selectedSongs.has(song.id);
-                checkbox.checked = isSelected;
-                checkbox.closest('.song-item').classList.toggle('selected', isSelected);
-            }
-        });
-        return;
-    }
-
-    // 一般模式渲染完整列表
     const isMainList = currentPlaylist === '已上傳歌曲清單';
     
     songList.innerHTML = currentSongs.map((song, index) => {
@@ -326,20 +285,13 @@ function handleSongClick(songId, index) {
 }
 
 function toggleSongSelect(songId) {
-    const checkbox = document.querySelector(`.song-item[data-song-id="${songId}"] .song-checkbox`);
-    if (!checkbox) return;
-
     if (selectedSongs.has(songId)) {
         selectedSongs.delete(songId);
-        checkbox.checked = false;
-        checkbox.closest('.song-item').classList.remove('selected');
     } else {
         selectedSongs.add(songId);
-        checkbox.checked = true;
-        checkbox.closest('.song-item').classList.add('selected');
     }
-
     selectedCount.textContent = `已選擇 ${selectedSongs.size} 首`;
+    renderSongList();
 }
 
 function enterBatchMode() {
@@ -440,13 +392,6 @@ songList.addEventListener('contextmenu', (e) => {
 
 function playSong(index) {
     if (currentSongs.length === 0) return;
-        if (!audioCtx) {
-        initAudioProcessing(audio);
-    }
-    if (audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
-}
-
     currentIndex = index;
     const song = currentSongs[currentIndex];
     
@@ -473,49 +418,6 @@ function playSong(index) {
                 isPlaying = false;
                 updatePlayButton();
             });
-    }
-}
-
-// ===== 車用模式 Audio 初始化 =====
-function initAudioProcessing(audioElement) {
-    if (audioCtx) return;
-
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-    sourceNode = audioCtx.createMediaElementSource(audioElement);
-    compressor = audioCtx.createDynamicsCompressor();
-    gainNode = audioCtx.createGain();
-
-    sourceNode
-        .connect(compressor)
-        .connect(gainNode)
-        .connect(audioCtx.destination);
-
-    applyAudioMode();
-}
-
-// ===== 套用一般 / 車用音訊參數 =====
-function applyAudioMode() {
-    if (!compressor || !gainNode) return;
-
-    if (carModeEnabled) {
-        // 🚗 車用模式
-        compressor.threshold.value = -22;
-        compressor.knee.value = 12;
-        compressor.ratio.value = 4;
-        compressor.attack.value = 0.003;
-        compressor.release.value = 0.3;
-
-        gainNode.gain.value = 0.65;
-    } else {
-        // 🎧 一般模式
-        compressor.threshold.value = -12;
-        compressor.knee.value = 6;
-        compressor.ratio.value = 2;
-        compressor.attack.value = 0.01;
-        compressor.release.value = 0.25;
-
-        gainNode.gain.value = 1.0;
     }
 }
 
@@ -629,44 +531,55 @@ function playNext() {
     }
 }
 
+// 獲取下一個隨機索引（不重複，直到所有歌曲播完）
 function getNextShuffleIndex() {
-    if (currentSongs.length === 1) return 0;
-
+    // 如果可用池為空，重新填充（但排除當前正在播放的歌曲）
     if (availableIndices.length === 0) {
-        availableIndices = currentSongs.map((_, i) => i).filter(i => i !== currentIndex);
-        shuffleHistory = [currentIndex]; // 保留當前
+        availableIndices = currentSongs.map((_, i) => i);
+        shuffleHistory = [];
+        
+        // 如果有超過一首歌，排除當前歌曲避免連續播放同一首
+        if (currentSongs.length > 1 && availableIndices.includes(currentIndex)) {
+            availableIndices = availableIndices.filter(i => i !== currentIndex);
+        }
+        
+        console.log('🔄 隨機播放已完成一輪，重新開始');
         showToast('已播完所有歌曲，重新隨機播放', 2000);
     }
-
+    
+    // 從可用池中隨機選擇一個索引
     const randomPos = Math.floor(Math.random() * availableIndices.length);
-    const selectedIndex = availableIndices.splice(randomPos, 1)[0];
+    const selectedIndex = availableIndices[randomPos];
+    
+    // 從可用池中移除已選擇的索引
+    availableIndices.splice(randomPos, 1);
+    
+    // 添加到歷史記錄
     shuffleHistory.push(selectedIndex);
-
+    
     console.log(`🎲 隨機選擇: ${selectedIndex + 1}/${currentSongs.length}, 剩餘: ${availableIndices.length}`);
+    
     return selectedIndex;
 }
 
 function playPrevious() {
     if (currentSongs.length === 0) return;
-
+    
     if (isShuffle) {
+        // 在隨機模式下，回到上一首播放過的歌
         if (shuffleHistory.length > 1) {
             // 移除當前歌曲
             shuffleHistory.pop();
+            // 獲取上一首歌
             const previousIndex = shuffleHistory[shuffleHistory.length - 1];
-
-            // 將當前歌曲加入可用池（避免重複）
+            // 將當前歌曲加回可用池
             if (!availableIndices.includes(currentIndex)) {
                 availableIndices.push(currentIndex);
             }
-
             currentIndex = previousIndex;
             playSong(currentIndex);
-        } else if (currentSongs.length === 1) {
-            // 單首歌隨機模式，直接播放自己
-            playSong(currentIndex);
         } else {
-            // 沒有歷史紀錄，隨機選一首
+            // 如果沒有歷史記錄，就播放一首隨機的
             const nextIndex = getNextShuffleIndex();
             playSong(nextIndex);
         }
